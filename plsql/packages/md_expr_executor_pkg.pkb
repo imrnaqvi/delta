@@ -164,22 +164,123 @@ create or replace package body md_expr_executor_pkg as
       return p_expr;
   end substitute_param_references;
 
+  function validate_expression_guardrails(
+    p_expr                 in varchar2,
+    p_allowed_functions    in json_array_t,
+    p_disallow_subqueries  in boolean default true
+  ) return varchar2 is
+    type function_set_t is table of pls_integer index by varchar2(4000);
+    l_allowed_set        function_set_t;
+    l_has_allowlist      boolean := false;
+    l_upper_expr         varchar2(4000) := upper(nvl(p_expr, ''));
+    l_func_name          varchar2(4000);
+    l_allowed_name       varchar2(4000);
+    l_occurrence         pls_integer := 1;
+  begin
+    if instr(l_upper_expr, ';') > 0 then
+      return 'Blocked token detected: ;';
+    end if;
+
+    if instr(l_upper_expr, '--') > 0 then
+      return 'Blocked token detected: --';
+    end if;
+
+    if instr(l_upper_expr, '/*') > 0 or instr(l_upper_expr, '*/') > 0 then
+      return 'Blocked token detected: SQL comment marker';
+    end if;
+
+    if p_disallow_subqueries then
+      if regexp_like(l_upper_expr, '(^|[^A-Z0-9_])(SELECT|FROM|UNION|JOIN|WITH)([^A-Z0-9_]|$)') then
+        return 'Blocked keyword detected for expression guardrails';
+      end if;
+    end if;
+
+    if p_allowed_functions is not null and p_allowed_functions.get_size > 0 then
+      l_has_allowlist := true;
+
+      for i in 0 .. p_allowed_functions.get_size - 1 loop
+        l_allowed_name := upper(trim(p_allowed_functions.get_string(i)));
+        if l_allowed_name is not null then
+          l_allowed_set(l_allowed_name) := 1;
+        end if;
+      end loop;
+    end if;
+
+    if l_has_allowlist then
+      loop
+        l_func_name := regexp_substr(
+          l_upper_expr,
+          '([A-Z][A-Z0-9_$#\.]*)\(',
+          1,
+          l_occurrence,
+          null,
+          1
+        );
+
+        exit when l_func_name is null;
+
+        if not l_allowed_set.exists(l_func_name) then
+          return 'Function not allowed: ' || l_func_name;
+        end if;
+
+        l_occurrence := l_occurrence + 1;
+      end loop;
+    end if;
+
+    return null;
+  exception
+    when others then
+      return 'Expression validator failed: ' || sqlerrm;
+  end validate_expression_guardrails;
+
   function execute_expression(
     p_rule_payload  in clob,
     p_source_values in clob,
     p_params_json   in clob default null
   ) return computed_value_rec is
     l_result            computed_value_rec;
+    l_payload_obj       json_object_t;
+    l_allowed_functions json_array_t;
+    l_disallow_subquery boolean := true;
+    l_validation_error  varchar2(4000);
     l_expr              varchar2(4000);
     l_evaluable_expr    varchar2(4000);
     l_computed_value    varchar2(4000);
   begin
+    l_payload_obj := json_object_t.parse(p_rule_payload);
+
     -- Extract "expr" from payload
-    l_expr := json_value(p_rule_payload, '$.expr');
+    l_expr := l_payload_obj.get_string('expr');
 
     if l_expr is null then
       l_result.value_status := 'FAILED';
       l_result.failure_reason := 'Payload missing "expr" field';
+      return l_result;
+    end if;
+
+    begin
+      l_allowed_functions := l_payload_obj.get_array('allowed_functions');
+    exception
+      when others then
+        l_allowed_functions := null;
+    end;
+
+    begin
+      l_disallow_subquery := l_payload_obj.get_boolean('disallow_subqueries');
+    exception
+      when others then
+        l_disallow_subquery := true;
+    end;
+
+    l_validation_error := validate_expression_guardrails(
+      p_expr                => l_expr,
+      p_allowed_functions   => l_allowed_functions,
+      p_disallow_subqueries => l_disallow_subquery
+    );
+
+    if l_validation_error is not null then
+      l_result.value_status := 'FAILED';
+      l_result.failure_reason := 'Expression validation failed: ' || l_validation_error;
       return l_result;
     end if;
 

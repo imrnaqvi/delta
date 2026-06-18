@@ -8,12 +8,14 @@ create or replace package md_expr_executor_pkg as
    *   {"expr":"SRC.SECURITY_ID"}
    *   {"expr":"SRC.QUANTITY * SRC.UNIT_PRICE"}
    *   {"expr":"SRC.FIRST_NAME || ' ' || SRC.LAST_NAME"}
+  *   {"expr":"round(PARAM.X + 1)","allowed_functions":["ROUND"],"disallow_subqueries":true}
    *
    * Execution:
    *   1. Extract "expr" from rule_payload JSON
    *   2. Substitute SRC.COL references with actual source values
-   *   3. Evaluate expression via SQL or PL/SQL
-   *   4. Return computed value
+  *   3. Validate blocked keywords/tokens and optional allowed function list
+  *   4. Evaluate expression via SQL or PL/SQL
+  *   5. Return computed value
    */
 
   type computed_value_rec is record (
