@@ -661,7 +661,9 @@ create or replace package body md_rule_executor_pkg as
     p_rule_name     in varchar2,
     p_rule_payload  in clob,
     p_source_values in clob,
-    p_params_json   in clob default null
+    p_params_json   in clob default null,
+    p_tenant_id     in varchar2 default null,
+    p_context_id    in varchar2 default null
   ) return computed_value_rec is
     l_result computed_value_rec;
   begin
@@ -675,7 +677,9 @@ create or replace package body md_rule_executor_pkg as
           l_expr_result := md_expr_executor_pkg.execute_expression(
             p_rule_payload  => p_rule_payload,
             p_source_values => p_source_values,
-            p_params_json   => p_params_json
+            p_params_json   => p_params_json,
+            p_tenant_id     => p_tenant_id,
+            p_context_id    => p_context_id
           );
           l_result.computed_value_txt := l_expr_result.computed_value_txt;
           l_result.computed_value_json := l_expr_result.computed_value_json;
@@ -875,7 +879,9 @@ create or replace package body md_rule_executor_pkg as
           p_rule_name     => l_rule_name,
           p_rule_payload  => l_rule_payload,
           p_source_values => l_source_values,
-          p_params_json   => l_params_json
+          p_params_json   => l_params_json,
+          p_tenant_id     => p_tenant_id,
+          p_context_id    => p_context_id
         );
 
         l_result.metrics.rules_executed := l_result.metrics.rules_executed + 1;
@@ -978,7 +984,9 @@ create or replace package body md_rule_executor_pkg as
       p_rule_name     => l_rule_name,
       p_rule_payload  => l_rule_payload,
       p_source_values => p_source_values,
-      p_params_json   => null
+      p_params_json   => null,
+      p_tenant_id     => p_tenant_id,
+      p_context_id    => p_context_id
     );
     return l_result;
   exception

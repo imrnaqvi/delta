@@ -233,10 +233,41 @@ create or replace package body md_expr_executor_pkg as
       return 'Expression validator failed: ' || sqlerrm;
   end validate_expression_guardrails;
 
+  function load_registry_allowed_functions(
+    p_tenant_id  in varchar2,
+    p_context_id in varchar2
+  ) return json_array_t is
+    l_allowed_json clob;
+  begin
+    if p_tenant_id is null or p_context_id is null then
+      return null;
+    end if;
+
+    select json_arrayagg(upper(function_name) returning clob)
+      into l_allowed_json
+      from md_expr_allowed_function
+     where tenant_id = p_tenant_id
+       and context_id = p_context_id
+       and nvl(active_flag, 'Y') = 'Y';
+
+    if l_allowed_json is null then
+      return null;
+    end if;
+
+    return json_array_t.parse(l_allowed_json);
+  exception
+    when no_data_found then
+      return null;
+    when others then
+      return null;
+  end load_registry_allowed_functions;
+
   function execute_expression(
     p_rule_payload  in clob,
     p_source_values in clob,
-    p_params_json   in clob default null
+    p_params_json   in clob default null,
+    p_tenant_id     in varchar2 default null,
+    p_context_id    in varchar2 default null
   ) return computed_value_rec is
     l_result            computed_value_rec;
     l_payload_obj       json_object_t;
@@ -264,6 +295,13 @@ create or replace package body md_expr_executor_pkg as
       when others then
         l_allowed_functions := null;
     end;
+
+    if l_allowed_functions is null then
+      l_allowed_functions := load_registry_allowed_functions(
+        p_tenant_id  => p_tenant_id,
+        p_context_id => p_context_id
+      );
+    end if;
 
     begin
       l_disallow_subquery := l_payload_obj.get_boolean('disallow_subqueries');

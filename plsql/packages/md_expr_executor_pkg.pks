@@ -8,14 +8,15 @@ create or replace package md_expr_executor_pkg as
    *   {"expr":"SRC.SECURITY_ID"}
    *   {"expr":"SRC.QUANTITY * SRC.UNIT_PRICE"}
    *   {"expr":"SRC.FIRST_NAME || ' ' || SRC.LAST_NAME"}
-  *   {"expr":"round(PARAM.X + 1)","allowed_functions":["ROUND"],"disallow_subqueries":true}
+    *   {"expr":"round(PARAM.X + 1)","allowed_functions":["ROUND"],"disallow_subqueries":true}
    *
    * Execution:
    *   1. Extract "expr" from rule_payload JSON
    *   2. Substitute SRC.COL references with actual source values
-  *   3. Validate blocked keywords/tokens and optional allowed function list
-  *   4. Evaluate expression via SQL or PL/SQL
-  *   5. Return computed value
+    *   3. Validate blocked keywords/tokens and optional allowed function list
+    *   4. If payload allowlist is missing, optionally load allowed functions from metadata registry
+    *   5. Evaluate expression via SQL or PL/SQL
+    *   6. Return computed value
    */
 
   type computed_value_rec is record (
@@ -32,12 +33,16 @@ create or replace package md_expr_executor_pkg as
    * @param p_rule_payload rule_payload JSON with "expr" field
    * @param p_source_values Source column values as JSON object
    * @param p_params_json Runtime parameters as JSON object (PARAM.*)
+   * @param p_tenant_id Optional tenant scope for metadata function governance
+   * @param p_context_id Optional context scope for metadata function governance
    * @return computed_value_rec
    */
   function execute_expression(
     p_rule_payload  in clob,
     p_source_values in clob,
-    p_params_json   in clob default null
+    p_params_json   in clob default null,
+    p_tenant_id     in varchar2 default null,
+    p_context_id    in varchar2 default null
   ) return computed_value_rec;
 
 end md_expr_executor_pkg;

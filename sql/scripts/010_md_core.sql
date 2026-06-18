@@ -143,6 +143,21 @@ create table md_rule (
 
 create sequence md_rule_seq start with 1 increment by 1 nocache;
 
+create table md_expr_allowed_function (
+  expr_allowed_function_id   number primary key,
+  tenant_id                  varchar2(64) not null,
+  context_id                 varchar2(64) not null,
+  function_name              varchar2(128) not null,
+  active_flag                varchar2(1) default 'Y' not null,
+  created_by                 varchar2(128),
+  created_at                 timestamp default systimestamp not null,
+  updated_at                 timestamp,
+  constraint md_expr_fn_active_ck check (active_flag in ('Y','N')),
+  constraint md_expr_fn_uq unique (tenant_id, context_id, function_name)
+);
+
+create sequence md_expr_allowed_function_seq start with 1 increment by 1 nocache;
+
 create table md_source_context (
   source_context_id         number primary key,
   tenant_id                 varchar2(64) not null,

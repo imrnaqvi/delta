@@ -66,6 +66,15 @@ begin
 end;
 /
 
+create or replace trigger md_expr_allowed_fn_bi_trg
+before insert on md_expr_allowed_function
+for each row
+when (new.expr_allowed_function_id is null)
+begin
+  :new.expr_allowed_function_id := md_expr_allowed_function_seq.nextval;
+end;
+/
+
 create or replace trigger md_rule_param_req_bi_trg
 before insert on md_rule_parameter_requirement
 for each row
