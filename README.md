@@ -34,3 +34,7 @@ This workspace is structured for Oracle database development across SQL, PL/SQL,
 
 Recommended extensions are listed in `.vscode/extensions.json`.
 Editor defaults for SQL and markdown are in `.vscode/settings.json`.
+
+## Compliance Notes
+
+- Internal AI provenance note: [docs/ai-provenance-note.md](docs/ai-provenance-note.md)
