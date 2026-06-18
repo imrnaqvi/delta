@@ -16,6 +16,458 @@ create or replace package body md_rule_executor_pkg as
     dbms_output.put_line('[ERROR] ' || p_message);
   end log_error;
 
+  function enquote_value(p_value in varchar2) return varchar2 is
+  begin
+    if p_value is null then
+      return 'null';
+    end if;
+
+    return '''' || replace(p_value, '''', '''''') || '''';
+  end enquote_value;
+
+  function substitute_tokens(
+    p_expr          in varchar2,
+    p_source_values in clob,
+    p_params_json   in clob default null
+  ) return varchar2 is
+    l_result varchar2(4000) := p_expr;
+
+    procedure replace_object(
+      p_obj      in json_object_t,
+      p_prefix   in varchar2,
+      p_is_param in boolean
+    ) is
+      l_keys  json_key_list;
+      l_key   varchar2(4000);
+      l_elem  json_element_t;
+      l_child json_object_t;
+      l_token varchar2(4000);
+      l_value varchar2(4000);
+    begin
+      l_keys := p_obj.get_keys;
+
+      for i in 1 .. l_keys.count loop
+        l_key := l_keys(i);
+        l_elem := p_obj.get(l_key);
+
+        if p_prefix is null then
+          l_token := l_key;
+        else
+          l_token := p_prefix || '.' || l_key;
+        end if;
+
+        if l_elem is not null and l_elem.is_object then
+          l_child := json_object_t.parse(l_elem.to_string);
+          replace_object(l_child, l_token, p_is_param);
+        else
+          if l_elem is null or l_elem.is_null then
+            l_value := 'null';
+          elsif l_elem.is_string then
+            l_value := enquote_value(p_obj.get_string(l_key));
+          elsif l_elem.is_number then
+            l_value := to_char(p_obj.get_number(l_key));
+          elsif l_elem.is_boolean then
+            if p_obj.get_boolean(l_key) then
+              l_value := '''Y''';
+            else
+              l_value := '''N''';
+            end if;
+          else
+            l_value := enquote_value(l_elem.to_string);
+          end if;
+
+          if p_is_param then
+            l_result := replace(l_result, 'PARAM.' || l_token, l_value);
+          else
+            if p_prefix is null then
+              l_result := replace(l_result, 'SRC.' || l_key, l_value);
+            end if;
+
+            l_result := replace(l_result, l_token, l_value);
+          end if;
+        end if;
+      end loop;
+    end replace_object;
+  begin
+    if p_source_values is not null then
+      replace_object(json_object_t.parse(p_source_values), null, false);
+    end if;
+
+    if p_params_json is not null then
+      replace_object(json_object_t.parse(p_params_json), null, true);
+    end if;
+
+    return l_result;
+  exception
+    when others then
+      return p_expr;
+  end substitute_tokens;
+
+  function resolve_mapped_value(
+    p_source_kind    in varchar2,
+    p_source_expr    in clob,
+    p_computed_value in computed_value_rec,
+    p_source_values  in clob,
+    p_params_json    in clob
+  ) return varchar2 is
+    l_expr varchar2(4000);
+    l_sql  varchar2(4000);
+    l_txt  varchar2(4000);
+  begin
+    case upper(p_source_kind)
+      when 'COMPUTED_VALUE_JSON' then
+        if p_computed_value.computed_value_json is not null then
+          return dbms_lob.substr(p_computed_value.computed_value_json, 4000, 1);
+        end if;
+        return p_computed_value.computed_value_txt;
+      when 'SOURCE_ALIAS' then
+        return substitute_tokens(substr(p_source_expr, 1, 4000), p_source_values, null);
+      when 'PARAM' then
+        l_expr := substr(p_source_expr, 1, 4000);
+        if instr(upper(l_expr), 'PARAM.') <> 1 then
+          l_expr := 'PARAM.' || l_expr;
+        end if;
+        return substitute_tokens(l_expr, null, p_params_json);
+      when 'EXPR' then
+        l_sql := substitute_tokens(substr(p_source_expr, 1, 4000), p_source_values, p_params_json);
+        execute immediate 'select ' || l_sql || ' from dual' into l_txt;
+        return l_txt;
+      when 'LITERAL' then
+        return substr(p_source_expr, 1, 4000);
+      when 'RULE_OUTPUT' then
+        return p_computed_value.computed_value_txt;
+      else
+        return p_computed_value.computed_value_txt;
+    end case;
+  exception
+    when others then
+      return null;
+  end resolve_mapped_value;
+
+  function normalize_target_value(p_value in varchar2) return varchar2 is
+  begin
+    if p_value is null then
+      return null;
+    end if;
+
+    if length(p_value) >= 2 and substr(p_value, 1, 1) = '''' and substr(p_value, -1, 1) = '''' then
+      return replace(substr(p_value, 2, length(p_value) - 2), '''''', '''');
+    end if;
+
+    return p_value;
+  end normalize_target_value;
+
+  function json_quote(p_value in varchar2) return varchar2 is
+  begin
+    return '"' || replace(replace(nvl(p_value, ''), '\', '\\'), '"', '\"') || '"';
+  end json_quote;
+
+  function generate_target_action_fingerprint(
+    p_run_id            in number,
+    p_rule_id           in number,
+    p_action_type       in varchar2,
+    p_target_column_name in varchar2,
+    p_target_key_hash   in varchar2,
+    p_value             in varchar2
+  ) return varchar2 is
+    l_hash_value number;
+  begin
+    l_hash_value := dbms_utility.get_hash_value(
+      to_char(p_run_id) || '|' ||
+      to_char(p_rule_id) || '|' ||
+      p_action_type || '|' ||
+      nvl(p_target_column_name, '') || '|' ||
+      nvl(p_target_key_hash, '') || '|' ||
+      nvl(p_value, ''),
+      0,
+      2147483647
+    );
+
+    return to_char(l_hash_value);
+  end generate_target_action_fingerprint;
+
+  procedure apply_target_actions(
+    p_run_id          in number,
+    p_rule_id         in number,
+    p_tenant_id       in varchar2,
+    p_context_id      in varchar2,
+    p_change_event_id in number,
+    p_source_values   in clob,
+    p_params_json     in clob,
+    p_computed_value  in computed_value_rec,
+    o_executed_count  out number,
+    o_failed_count    out number,
+    o_skipped_count   out number
+  ) is
+    l_key_json        clob;
+    l_action_json     clob;
+    l_bind_json       clob;
+    l_key_hash        varchar2(128);
+    l_sql             clob;
+    l_target_value    varchar2(4000);
+    l_rows_affected   number;
+    l_status          varchar2(20);
+    l_error_message   varchar2(4000);
+    l_error_code      number;
+    l_fingerprint     varchar2(200);
+    l_insert_columns  clob;
+    l_insert_values   clob;
+    l_where_clause    clob;
+    l_key_value       varchar2(4000);
+    l_action_id       number;
+    l_action_type     varchar2(20);
+    l_target_object_id number;
+    l_target_column_id number;
+    l_missing_row_policy varchar2(20);
+    l_schema_name     varchar2(128);
+    l_object_name     varchar2(128);
+    l_column_name     varchar2(128);
+
+    cursor c_actions is
+      select rta.rule_target_action_id,
+             rta.action_type,
+             rta.target_object_id,
+             rta.target_column_id,
+             rta.missing_row_policy,
+             o.system_name,
+             o.schema_name,
+             o.object_name,
+             c.column_name
+        from md_rule_target_action rta
+        join md_object o
+          on o.object_id = rta.target_object_id
+         and o.tenant_id = rta.tenant_id
+         and o.context_id = rta.context_id
+        left join md_column c
+          on c.column_id = rta.target_column_id
+         and c.tenant_id = rta.tenant_id
+         and c.context_id = rta.context_id
+       where rta.rule_id = p_rule_id
+         and rta.tenant_id = p_tenant_id
+           and rta.context_id = p_context_id
+       order by rta.rule_target_action_id;
+
+    cursor c_key_maps(p_rule_target_action_id number) is
+      select kcm.source_kind,
+             kcm.source_expr,
+             kc.ordinal_position,
+             c.column_name
+        from md_rule_target_key_map kcm
+        join md_key_component kc
+          on kc.key_component_id = kcm.target_key_component_id
+        join md_column c
+          on c.column_id = kc.column_id
+         and c.tenant_id = kcm.tenant_id
+         and c.context_id = kcm.context_id
+       where kcm.rule_target_action_id = p_rule_target_action_id
+         and kcm.tenant_id = p_tenant_id
+         and kcm.context_id = p_context_id
+       order by kc.ordinal_position;
+
+    cursor c_column_maps(p_rule_target_action_id number) is
+      select value_source_kind, value_expr, target_column_id, c.column_name
+        from md_rule_target_column_map tcm
+        join md_column c
+          on c.column_id = tcm.target_column_id
+         and c.tenant_id = tcm.tenant_id
+         and c.context_id = tcm.context_id
+       where tcm.rule_target_action_id = p_rule_target_action_id
+         and tcm.tenant_id = p_tenant_id
+         and tcm.context_id = p_context_id;
+  begin
+    o_executed_count := 0;
+    o_failed_count := 0;
+    o_skipped_count := 0;
+
+    for act_rec in c_actions loop
+      begin
+        l_action_id := act_rec.rule_target_action_id;
+        l_action_type := act_rec.action_type;
+        l_target_object_id := act_rec.target_object_id;
+        l_target_column_id := act_rec.target_column_id;
+        l_missing_row_policy := act_rec.missing_row_policy;
+        l_schema_name := act_rec.schema_name;
+        l_object_name := act_rec.object_name;
+        l_column_name := act_rec.column_name;
+
+        l_key_json := '{';
+        l_action_json := null;
+        l_bind_json := null;
+        l_key_hash := null;
+        l_sql := null;
+        l_insert_columns := null;
+        l_insert_values := null;
+        l_where_clause := null;
+        l_status := null;
+        l_error_message := null;
+        l_error_code := null;
+        l_rows_affected := null;
+
+        for key_rec in c_key_maps(l_action_id) loop
+          l_key_value := resolve_mapped_value(
+            key_rec.source_kind,
+            key_rec.source_expr,
+            p_computed_value,
+            p_source_values,
+            p_params_json
+          );
+          l_key_value := normalize_target_value(l_key_value);
+
+          if l_key_json <> '{' then
+            l_key_json := l_key_json || ',';
+          end if;
+
+          l_key_json := l_key_json || json_quote(key_rec.column_name) || ':' || json_quote(l_key_value);
+          l_key_hash := case when l_key_hash is null then l_key_value else l_key_hash || ':' || l_key_value end;
+        end loop;
+
+        if l_key_json = '{' then
+          raise_application_error(-20010, 'No target key mapping for rule_target_action_id=' || l_action_id);
+        end if;
+
+        l_key_json := l_key_json || '}';
+
+        for col_rec in c_column_maps(l_action_id) loop
+          l_target_value := resolve_mapped_value(
+            col_rec.value_source_kind,
+            col_rec.value_expr,
+            p_computed_value,
+            p_source_values,
+            p_params_json
+          );
+          l_target_value := normalize_target_value(l_target_value);
+
+          l_fingerprint := generate_target_action_fingerprint(
+            p_run_id,
+            p_rule_id,
+            l_action_type,
+            col_rec.column_name,
+            l_key_hash,
+            l_target_value
+          );
+
+          l_action_json := '{'
+            || json_quote('targetColumn') || ':' || json_quote(col_rec.column_name) || ','
+            || json_quote('targetValue') || ':' || json_quote(l_target_value) || ','
+            || json_quote('actionType') || ':' || json_quote(l_action_type)
+            || '}';
+
+          l_bind_json := '{'
+            || json_quote('targetKey') || ':' || l_key_json || ','
+            || json_quote('targetValue') || ':' || json_quote(l_target_value) || ','
+            || json_quote('actionType') || ':' || json_quote(l_action_type)
+            || '}';
+
+          l_insert_columns := null;
+          l_insert_values := null;
+
+          for key_rec in c_key_maps(l_action_id) loop
+            if l_insert_columns is null then
+              l_insert_columns := key_rec.column_name;
+              l_insert_values := enquote_value(normalize_target_value(resolve_mapped_value(
+                key_rec.source_kind,
+                key_rec.source_expr,
+                p_computed_value,
+                p_source_values,
+                p_params_json
+              )));
+            else
+              l_insert_columns := l_insert_columns || ', ' || key_rec.column_name;
+              l_insert_values := l_insert_values || ', ' || enquote_value(normalize_target_value(resolve_mapped_value(
+                key_rec.source_kind,
+                key_rec.source_expr,
+                p_computed_value,
+                p_source_values,
+                p_params_json
+              )));
+            end if;
+          end loop;
+
+          if l_insert_columns is null then
+            raise_application_error(-20012, 'Unable to build insert column list for rule_target_action_id=' || l_action_id);
+          end if;
+
+          l_insert_columns := l_insert_columns || ', ' || col_rec.column_name;
+          l_insert_values := l_insert_values || ', ' || enquote_value(l_target_value);
+
+          if upper(l_action_type) in ('UPDATE','INSERT') then
+            if upper(l_action_type) = 'UPDATE' then
+              l_sql := 'update ' || l_schema_name || '.' || l_object_name || ' set ' || l_column_name || ' = ' || enquote_value(l_target_value) || ' where ';
+
+              declare
+                l_first boolean := true;
+              begin
+                for key_rec in c_key_maps(l_action_id) loop
+                  if not l_first then
+                    l_sql := l_sql || ' and ';
+                  end if;
+                  l_key_value := resolve_mapped_value(
+                    key_rec.source_kind,
+                    key_rec.source_expr,
+                    p_computed_value,
+                    p_source_values,
+                    p_params_json
+                  );
+                  l_key_value := normalize_target_value(l_key_value);
+                  l_sql := l_sql || key_rec.column_name || ' = ' || enquote_value(l_key_value);
+                  l_where_clause := case when l_where_clause is null then key_rec.column_name || '=' || nvl(l_key_value, 'null') else l_where_clause || ';' || key_rec.column_name || '=' || nvl(l_key_value, 'null') end;
+                  l_first := false;
+                end loop;
+              end;
+
+              execute immediate l_sql;
+              l_rows_affected := sql%rowcount;
+
+              if l_rows_affected = 0 and upper(l_missing_row_policy) = 'INSERT' then
+                l_sql := 'insert into ' || l_schema_name || '.' || l_object_name || ' (' || l_insert_columns || ') values (' || l_insert_values || ')';
+                execute immediate l_sql;
+                l_rows_affected := sql%rowcount;
+              elsif l_rows_affected = 0 and upper(l_missing_row_policy) = 'SKIP' then
+                o_skipped_count := o_skipped_count + 1;
+                l_status := 'SKIPPED';
+              elsif l_rows_affected = 0 then
+                raise_application_error(-20011, 'Target row not found for update: ' || l_schema_name || '.' || l_object_name);
+              end if;
+            else
+              l_sql := 'insert into ' || l_schema_name || '.' || l_object_name || ' (' || l_insert_columns || ') values (' || l_insert_values || ')';
+              execute immediate l_sql;
+              l_rows_affected := sql%rowcount;
+            end if;
+
+            if l_status is null then
+              l_status := 'EXECUTED';
+              o_executed_count := o_executed_count + 1;
+            end if;
+          else
+            l_status := 'SKIPPED';
+            l_rows_affected := 0;
+            l_error_message := 'Target action type not executed by this path: ' || l_action_type;
+            o_skipped_count := o_skipped_count + 1;
+          end if;
+
+          insert into md_run_target_action (
+            run_target_action_id, tenant_id, context_id, run_id, change_event_id, rule_id, target_object_id,
+            target_system_name, target_entity_name, target_key_json, target_key_hash, target_column_name,
+            action_type, action_payload_json, generated_sql_text, bind_payload_json, execution_status,
+            rows_affected, error_code, error_message, applied_flag, applied_at, action_fingerprint
+          ) values (
+            md_run_target_action_seq.nextval, p_tenant_id, p_context_id, p_run_id, p_change_event_id, p_rule_id,
+            l_target_object_id, act_rec.system_name, l_object_name, l_key_json, l_key_hash,
+            col_rec.column_name, l_action_type, l_action_json, l_sql, l_bind_json, l_status,
+            l_rows_affected, l_error_code, l_error_message,
+            case when l_status = 'EXECUTED' then 'Y' else 'N' end,
+            case when l_status = 'EXECUTED' then systimestamp else null end,
+            l_fingerprint
+          );
+        end loop;
+      exception
+        when others then
+          o_failed_count := o_failed_count + 1;
+          log_error('Target action failed: rule_id=' || p_rule_id || ', error=' || sqlerrm);
+      end;
+    end loop;
+  end apply_target_actions;
+
   /**
    * Fetch md_rule metadata including rule_payload JSON.
    */
@@ -217,6 +669,9 @@ create or replace package body md_rule_executor_pkg as
     l_output_columns    sys.odcivarchar2list;
     l_row_count         pls_integer;
     l_params_json       clob;
+    l_target_executed   number;
+    l_target_failed     number;
+    l_target_skipped    number;
 
     cursor c_selected_rules is
       select rule_id, transitive_flag
@@ -338,6 +793,20 @@ create or replace package body md_rule_executor_pkg as
             end if;
           end loop;
         end if;
+
+        apply_target_actions(
+          p_run_id          => p_run_id,
+          p_rule_id         => l_rule_id,
+          p_tenant_id       => p_tenant_id,
+          p_context_id      => p_context_id,
+          p_change_event_id => l_change_event_id,
+          p_source_values   => l_source_values,
+          p_params_json     => l_params_json,
+          p_computed_value  => l_computed_value,
+          o_executed_count  => l_target_executed,
+          o_failed_count    => l_target_failed,
+          o_skipped_count   => l_target_skipped
+        );
 
         -- Log impact trace
         log_impact_trace(p_run_id, l_rule_id, l_source_values, p_tenant_id, p_context_id);
