@@ -192,9 +192,13 @@ create table md_run_selected_rule (
   rule_id                   number not null,
   selection_reason          varchar2(100) not null,
   transitive_flag           varchar2(1) default 'N' not null,
+  gate_eval_status          varchar2(20) default 'NOT_EVALUATED' not null,
+  gate_eval_message         varchar2(4000),
+  gate_evaluated_at         timestamp,
   selected_at               timestamp default systimestamp not null,
   constraint md_run_sel_trans_ck check (transitive_flag in ('Y','N')),
   constraint md_run_sel_reason_ck check (selection_reason in ('DIRECT_COLUMN_LINK','TRANSITIVE_DEPENDENCY','MANUAL_OVERRIDE_INCLUDE')),
+  constraint md_run_sel_gate_status_ck check (gate_eval_status in ('NOT_EVALUATED','PASSED','FILTERED','ERROR')),
   constraint md_run_sel_rule_uq unique (tenant_id, context_id, run_id, change_event_id, rule_id),
   constraint md_run_sel_run_fk foreign key (run_id) references md_run(run_id)
 );

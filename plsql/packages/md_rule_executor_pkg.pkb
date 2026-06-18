@@ -103,6 +103,86 @@ create or replace package body md_rule_executor_pkg as
       return p_expr;
   end substitute_tokens;
 
+  function substitute_change_delta_tokens(
+    p_expr            in varchar2,
+    p_change_event_id in number,
+    p_tenant_id       in varchar2,
+    p_context_id      in varchar2
+  ) return varchar2 is
+    l_result varchar2(4000) := p_expr;
+    l_old_value varchar2(4000);
+    l_new_value varchar2(4000);
+  begin
+    for rec in (
+      select source_column_name, old_value_txt, new_value_txt
+        from md_change_event_column_delta
+       where change_event_id = p_change_event_id
+         and tenant_id = p_tenant_id
+         and context_id = p_context_id
+    ) loop
+      l_old_value := case when rec.old_value_txt is null then 'null' else enquote_value(rec.old_value_txt) end;
+      l_new_value := case when rec.new_value_txt is null then 'null' else enquote_value(rec.new_value_txt) end;
+
+      l_result := replace(l_result, 'OLD.' || rec.source_column_name, l_old_value);
+      l_result := replace(l_result, 'NEW.' || rec.source_column_name, l_new_value);
+      l_result := replace(l_result, 'old.' || rec.source_column_name, l_old_value);
+      l_result := replace(l_result, 'new.' || rec.source_column_name, l_new_value);
+    end loop;
+
+    return l_result;
+  exception
+    when others then
+      return p_expr;
+  end substitute_change_delta_tokens;
+
+  procedure evaluate_selection_gate(
+    p_rule_id          in number,
+    p_change_event_id  in number,
+    p_tenant_id        in varchar2,
+    p_context_id       in varchar2,
+    p_source_values    in clob,
+    p_params_json      in clob,
+    o_gate_status      out varchar2,
+    o_gate_message     out varchar2
+  ) is
+    l_gate_expr         clob;
+    l_gate_enabled_flag varchar2(1);
+    l_eval_expr         varchar2(4000);
+    l_gate_result       number;
+  begin
+    select selection_gate_expr, nvl(selection_gate_enabled_flag, 'Y')
+      into l_gate_expr, l_gate_enabled_flag
+      from md_rule
+     where rule_id = p_rule_id
+       and tenant_id = p_tenant_id
+       and context_id = p_context_id;
+
+    if l_gate_enabled_flag = 'N' or l_gate_expr is null then
+      o_gate_status := 'PASSED';
+      o_gate_message := null;
+      return;
+    end if;
+
+    l_eval_expr := substr(l_gate_expr, 1, 4000);
+    l_eval_expr := substitute_change_delta_tokens(l_eval_expr, p_change_event_id, p_tenant_id, p_context_id);
+    l_eval_expr := substitute_tokens(l_eval_expr, p_source_values, p_params_json);
+
+    execute immediate 'select case when (' || l_eval_expr || ') then 1 else 0 end from dual'
+      into l_gate_result;
+
+    if l_gate_result = 1 then
+      o_gate_status := 'PASSED';
+      o_gate_message := null;
+    else
+      o_gate_status := 'FILTERED';
+      o_gate_message := 'Gate expression evaluated FALSE';
+    end if;
+  exception
+    when others then
+      o_gate_status := 'ERROR';
+      o_gate_message := substr('Gate evaluation failed: ' || sqlerrm, 1, 4000);
+  end evaluate_selection_gate;
+
   function resolve_mapped_value(
     p_source_kind    in varchar2,
     p_source_expr    in clob,
@@ -672,9 +752,11 @@ create or replace package body md_rule_executor_pkg as
     l_target_executed   number;
     l_target_failed     number;
     l_target_skipped    number;
+    l_gate_status       varchar2(20);
+    l_gate_message      varchar2(4000);
 
     cursor c_selected_rules is
-      select rule_id, transitive_flag
+      select run_selected_rule_id, rule_id, transitive_flag
         from md_run_selected_rule
        where run_id = p_run_id
          and change_event_id = p_change_event_id
@@ -751,6 +833,35 @@ create or replace package body md_rule_executor_pkg as
         fetch_rule(l_rule_id, p_tenant_id, p_context_id, l_rule_name, l_rule_type, l_rule_payload);
         fetch_rule_inputs(l_rule_id, p_tenant_id, p_context_id, l_rule_inputs);
         fetch_rule_outputs(l_rule_id, p_tenant_id, p_context_id, l_rule_outputs);
+
+        evaluate_selection_gate(
+          p_rule_id         => l_rule_id,
+          p_change_event_id => l_change_event_id,
+          p_tenant_id       => p_tenant_id,
+          p_context_id      => p_context_id,
+          p_source_values   => l_source_values,
+          p_params_json     => l_params_json,
+          o_gate_status     => l_gate_status,
+          o_gate_message    => l_gate_message
+        );
+
+        update md_run_selected_rule
+           set gate_eval_status = l_gate_status,
+               gate_eval_message = l_gate_message,
+               gate_evaluated_at = systimestamp
+         where run_selected_rule_id = rec.run_selected_rule_id
+           and tenant_id = p_tenant_id
+           and context_id = p_context_id;
+
+        if l_gate_status = 'FILTERED' then
+          l_result.metrics.values_skipped := l_result.metrics.values_skipped + 1;
+          continue;
+        elsif l_gate_status = 'ERROR' then
+          l_result.error_messages.extend;
+          l_result.error_messages(l_result.error_messages.last) :=
+            'Rule gate failed: rule_id=' || l_rule_id || ', error=' || nvl(l_gate_message, 'UNKNOWN');
+          continue;
+        end if;
 
         -- Dispatch execution
         l_computed_value := dispatch_rule_execution(

@@ -6,6 +6,58 @@ prompt Applying target DML MVP upgrade...
 declare
   l_count number;
 begin
+  -- ===== Extend md_rule for optional selection gate =====
+  select count(*) into l_count
+    from user_tab_cols
+   where table_name = 'MD_RULE'
+     and column_name = 'SELECTION_GATE_EXPR';
+  if l_count = 0 then
+    execute immediate 'alter table md_rule add (selection_gate_expr clob)';
+  end if;
+
+  select count(*) into l_count
+    from user_tab_cols
+   where table_name = 'MD_RULE'
+     and column_name = 'SELECTION_GATE_ENABLED_FLAG';
+  if l_count = 0 then
+    execute immediate q'[alter table md_rule add (selection_gate_enabled_flag varchar2(1) default 'Y' not null)]';
+  end if;
+
+  select count(*) into l_count from user_constraints where constraint_name = 'MD_RULE_GATE_ENABLED_CK';
+  if l_count = 0 then
+    execute immediate q'[alter table md_rule add constraint md_rule_gate_enabled_ck check (selection_gate_enabled_flag in ('Y','N'))]';
+  end if;
+
+  -- ===== Extend md_run_selected_rule for gate audit =====
+  select count(*) into l_count
+    from user_tab_cols
+   where table_name = 'MD_RUN_SELECTED_RULE'
+     and column_name = 'GATE_EVAL_STATUS';
+  if l_count = 0 then
+    execute immediate q'[alter table md_run_selected_rule add (gate_eval_status varchar2(20) default 'NOT_EVALUATED' not null)]';
+  end if;
+
+  select count(*) into l_count
+    from user_tab_cols
+   where table_name = 'MD_RUN_SELECTED_RULE'
+     and column_name = 'GATE_EVAL_MESSAGE';
+  if l_count = 0 then
+    execute immediate 'alter table md_run_selected_rule add (gate_eval_message varchar2(4000))';
+  end if;
+
+  select count(*) into l_count
+    from user_tab_cols
+   where table_name = 'MD_RUN_SELECTED_RULE'
+     and column_name = 'GATE_EVALUATED_AT';
+  if l_count = 0 then
+    execute immediate 'alter table md_run_selected_rule add (gate_evaluated_at timestamp)';
+  end if;
+
+  select count(*) into l_count from user_constraints where constraint_name = 'MD_RUN_SEL_GATE_STATUS_CK';
+  if l_count = 0 then
+    execute immediate q'[alter table md_run_selected_rule add constraint md_run_sel_gate_status_ck check (gate_eval_status in ('NOT_EVALUATED','PASSED','FILTERED','ERROR'))]';
+  end if;
+
   -- ===== Extend md_rule_target_action =====
   select count(*) into l_count
     from user_tab_cols
