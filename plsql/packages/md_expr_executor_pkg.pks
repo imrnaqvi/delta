@@ -29,11 +29,13 @@ create or replace package md_expr_executor_pkg as
    *
    * @param p_rule_payload rule_payload JSON with "expr" field
    * @param p_source_values Source column values as JSON object
+   * @param p_params_json Runtime parameters as JSON object (PARAM.*)
    * @return computed_value_rec
    */
   function execute_expression(
     p_rule_payload  in clob,
-    p_source_values in clob
+    p_source_values in clob,
+    p_params_json   in clob default null
   ) return computed_value_rec;
 
 end md_expr_executor_pkg;

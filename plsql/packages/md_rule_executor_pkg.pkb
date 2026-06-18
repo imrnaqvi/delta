@@ -660,7 +660,8 @@ create or replace package body md_rule_executor_pkg as
     p_rule_type     in varchar2,
     p_rule_name     in varchar2,
     p_rule_payload  in clob,
-    p_source_values in clob
+    p_source_values in clob,
+    p_params_json   in clob default null
   ) return computed_value_rec is
     l_result computed_value_rec;
   begin
@@ -671,7 +672,11 @@ create or replace package body md_rule_executor_pkg as
         declare
           l_expr_result md_expr_executor_pkg.computed_value_rec;
         begin
-          l_expr_result := md_expr_executor_pkg.execute_expression(p_rule_payload, p_source_values);
+          l_expr_result := md_expr_executor_pkg.execute_expression(
+            p_rule_payload  => p_rule_payload,
+            p_source_values => p_source_values,
+            p_params_json   => p_params_json
+          );
           l_result.computed_value_txt := l_expr_result.computed_value_txt;
           l_result.computed_value_json := l_expr_result.computed_value_json;
           l_result.value_data_type := l_expr_result.value_data_type;
@@ -865,11 +870,12 @@ create or replace package body md_rule_executor_pkg as
 
         -- Dispatch execution
         l_computed_value := dispatch_rule_execution(
-          l_rule_id,
-          l_rule_type,
-          l_rule_name,
-          l_rule_payload,
-          l_source_values
+          p_rule_id       => l_rule_id,
+          p_rule_type     => l_rule_type,
+          p_rule_name     => l_rule_name,
+          p_rule_payload  => l_rule_payload,
+          p_source_values => l_source_values,
+          p_params_json   => l_params_json
         );
 
         l_result.metrics.rules_executed := l_result.metrics.rules_executed + 1;
@@ -966,7 +972,14 @@ create or replace package body md_rule_executor_pkg as
     l_result       computed_value_rec;
   begin
     fetch_rule(p_rule_id, p_tenant_id, p_context_id, l_rule_name, l_rule_type, l_rule_payload);
-    l_result := dispatch_rule_execution(p_rule_id, l_rule_type, l_rule_name, l_rule_payload, p_source_values);
+    l_result := dispatch_rule_execution(
+      p_rule_id       => p_rule_id,
+      p_rule_type     => l_rule_type,
+      p_rule_name     => l_rule_name,
+      p_rule_payload  => l_rule_payload,
+      p_source_values => p_source_values,
+      p_params_json   => null
+    );
     return l_result;
   exception
     when others then
