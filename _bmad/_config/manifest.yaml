@@ -1,0 +1,39 @@
+installation:
+  version: 6.8.0
+  installDate: 2026-06-17T00:57:03.749Z
+  lastUpdated: 2026-06-17T00:57:03.749Z
+modules:
+  - name: core
+    version: 6.8.0
+    installDate: 2026-06-17T00:57:01.930Z
+    lastUpdated: 2026-06-17T00:57:03.738Z
+    source: built-in
+    npmPackage: null
+    repoUrl: null
+  - name: bmm
+    version: 6.8.0
+    installDate: 2026-06-17T00:57:01.831Z
+    lastUpdated: 2026-06-17T00:57:03.741Z
+    source: built-in
+    npmPackage: null
+    repoUrl: null
+  - name: tea
+    version: v1.19.0
+    installDate: 2026-06-17T00:57:03.322Z
+    lastUpdated: 2026-06-17T00:57:03.745Z
+    source: external
+    npmPackage: bmad-method-test-architecture-enterprise
+    repoUrl: https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise
+    channel: stable
+    sha: 8734d51f24071ddbcb3617390b5fcddb4128ef77
+  - name: bmb
+    version: v2.0.0
+    installDate: 2026-06-17T00:57:03.578Z
+    lastUpdated: 2026-06-17T00:57:03.749Z
+    source: external
+    npmPackage: bmad-builder
+    repoUrl: https://github.com/bmad-code-org/bmad-builder
+    channel: stable
+    sha: 41569013c018c100aeabdeb802855e3459e8b9d6
+ides:
+  - github-copilot

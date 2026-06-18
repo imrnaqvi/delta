@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "Oracle.sql-developer",
+    "ms-azuretools.vscode-database",
+    "DavidAnson.vscode-markdownlint"
+  ]
+}

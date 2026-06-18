@@ -1,0 +1,25 @@
+# Oracle and SQL artifacts
+*.log
+*.lst
+*.trc
+*.out
+*.rej
+*.bad
+*.dmp
+*.tmp
+*.bak
+
+# SQLcl and local tooling
+.sqlcl/
+
+# Environment files
+.env
+.env.*
+
+# IDE/editor
+.vscode/*.code-workspace
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
