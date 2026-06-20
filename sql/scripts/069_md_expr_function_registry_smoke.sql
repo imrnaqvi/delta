@@ -8,7 +8,7 @@ prompt Running expression function registry smoke test...
 declare
   l_ok_registry      md_expr_executor_pkg.computed_value_rec;
   l_fail_registry    md_expr_executor_pkg.computed_value_rec;
-  l_ok_override      md_expr_executor_pkg.computed_value_rec;
+  l_fail_override    md_expr_executor_pkg.computed_value_rec;
   l_ok_optional      md_expr_executor_pkg.computed_value_rec;
 begin
   delete from md_expr_allowed_function
@@ -60,7 +60,7 @@ begin
     raise_application_error(-20902, 'Expected ABS to be blocked by metadata registry');
   end if;
 
-  l_ok_override := md_expr_executor_pkg.execute_expression(
+  l_fail_override := md_expr_executor_pkg.execute_expression(
     p_rule_payload  => '{"expr":"abs(PARAM.X)","allowed_functions":["ABS"],"disallow_subqueries":true}',
     p_source_values => '{}',
     p_params_json   => '{"X":2}',
@@ -68,11 +68,12 @@ begin
     p_context_id    => 'CTX_EXPR_GOV_SMOKE'
   );
 
-  dbms_output.put_line('ok_override_status=' || l_ok_override.value_status);
-  dbms_output.put_line('ok_override_value=' || nvl(l_ok_override.computed_value_txt, '<null>'));
+  dbms_output.put_line('fail_override_status=' || l_fail_override.value_status);
+  dbms_output.put_line('fail_override_reason=' || nvl(l_fail_override.failure_reason, '<null>'));
 
-  if l_ok_override.value_status <> 'COMPUTED' or nvl(l_ok_override.computed_value_txt, 'NULL') <> '2' then
-    raise_application_error(-20903, 'Expected payload allowlist to override metadata registry');
+  if l_fail_override.value_status <> 'FAILED'
+     or instr(nvl(l_fail_override.failure_reason, ' '), 'Function not allowed: ABS') = 0 then
+    raise_application_error(-20903, 'Expected metadata registry to block ABS even when payload allowlist is provided');
   end if;
 
   l_ok_optional := md_expr_executor_pkg.execute_expression(

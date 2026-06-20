@@ -165,6 +165,23 @@ create table md_run_source_snapshot (
 
 create sequence md_run_source_snapshot_seq start with 1 increment by 1 nocache;
 
+create table md_run_context_snapshot (
+  run_context_snapshot_id    number primary key,
+  tenant_id                  varchar2(64) not null,
+  context_id                 varchar2(64) not null,
+  run_id                     number not null,
+  change_event_id            number not null,
+  source_context_id          number not null,
+  source_values_json         clob not null check (source_values_json is json),
+  created_at                 timestamp default systimestamp not null,
+  constraint md_run_ctx_snap_uq unique (tenant_id, context_id, run_id, change_event_id, source_context_id),
+  constraint md_run_ctx_snap_run_fk foreign key (run_id) references md_run(run_id),
+  constraint md_run_ctx_snap_evt_fk foreign key (change_event_id) references md_change_event(change_event_id),
+  constraint md_run_ctx_snap_ctx_fk foreign key (source_context_id) references md_source_context(source_context_id)
+);
+
+create sequence md_run_context_snapshot_seq start with 1 increment by 1 nocache;
+
 create table md_processed_event (
   processed_event_id        number primary key,
   tenant_id                 varchar2(64) not null,

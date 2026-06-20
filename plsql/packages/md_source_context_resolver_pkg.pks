@@ -15,6 +15,23 @@ create or replace package md_source_context_resolver_pkg as
     p_params_json     in clob default null
   ) return clob;
 
+  procedure prefetch_selected_contexts(
+    p_run_id          in number,
+    p_change_event_id in number,
+    p_tenant_id       in varchar2,
+    p_context_id      in varchar2,
+    p_params_json     in clob default null
+  );
+
+  function get_prefetched_rule_source_values(
+    p_run_id          in number,
+    p_change_event_id in number,
+    p_rule_id         in number,
+    p_tenant_id       in varchar2,
+    p_context_id      in varchar2,
+    p_params_json     in clob default null
+  ) return clob;
+
 end md_source_context_resolver_pkg;
 /
 

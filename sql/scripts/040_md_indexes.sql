@@ -17,8 +17,11 @@ create index md_src_ctx_join_ctx_ix on md_source_context_join (source_context_id
 create index md_rule_src_ctx_rule_ix on md_rule_source_context (rule_id, source_context_id, active_flag);
 create index md_rule_src_obj_rule_ix on md_rule_source_object (rule_id, source_alias, active_flag);
 create index md_rule_src_join_rule_ix on md_rule_source_join (rule_id, join_order, active_flag);
+create index md_src_ctx_pred_lookup_ix on md_source_context_predicate (tenant_id, context_id, source_context_id, active_flag, rule_id, predicate_group_no, predicate_order_no);
+create index md_src_ctx_pred_obj_ix on md_source_context_predicate (source_context_object_id, column_id);
 create index md_corr_policy_release_ix on md_correlation_policy (release_id, active_flag, window_minutes);
 create index md_rule_input_rule_ix on md_rule_input (rule_id, source_column_id);
+create index md_rule_input_alias_ix on md_rule_input (rule_id, output_alias);
 create index md_rule_output_rule_ix on md_rule_output (rule_id, target_column_id);
 create index md_rule_dep_release_ix on md_rule_dependency (release_id, upstream_rule_id, downstream_rule_id);
 create index md_rule_tgt_release_ix on md_rule_target_action (release_id, rule_id, target_object_id);
@@ -38,6 +41,7 @@ create index md_run_param_snap_run_ix on md_run_parameter_snapshot (run_id, para
 create index md_run_corr_group_run_ix on md_run_correlation_group (run_id, correlation_key);
 create index md_run_corr_group_evt_ix on md_run_correlation_group (anchor_change_event_id);
 create index md_run_src_snap_run_ix on md_run_source_snapshot (run_id, rule_id, change_event_id);
+create index md_run_ctx_snap_run_ix on md_run_context_snapshot (run_id, change_event_id, source_context_id);
 create index md_proc_event_exp_ix on md_processed_event (expires_at, processed_at);
 create index md_sel_rule_run_ix on md_run_selected_rule (run_id, rule_id, transitive_flag);
 create index md_tgt_action_run_ix on md_run_target_action (run_id, action_type, applied_flag);

@@ -153,7 +153,7 @@ begin
     'R_XE_SECURITY_ISSUER_PRICING_EXPR',
     'EXPRESSION',
     'PUBLISHED',
-    '{"expr":"SEC.SECURITY_ID || ''-'' || ISS.ISSUER_ID || ''-'' || PRC.PRICE"}',
+    '{}',
     'Y',
     'xe_smoke'
   ) returning rule_id into l_rule_id;
@@ -403,7 +403,6 @@ begin
     'Y'
   );
 
-  -- 6) Correlation policy
   insert into md_correlation_policy (
     correlation_policy_id,
     tenant_id,
@@ -413,7 +412,8 @@ begin
     correlation_mode,
     window_minutes,
     active_flag
-  ) values (
+  )
+  select
     md_correlation_policy_seq.nextval,
     l_tenant_id,
     l_context_id,
@@ -422,7 +422,15 @@ begin
     'SOURCE_KEY_HASH',
     30,
     'Y'
-  );
+    from dual
+   where not exists (
+     select 1
+       from md_correlation_policy cp
+      where cp.tenant_id = l_tenant_id
+        and cp.context_id = l_context_id
+        and cp.release_id = l_release_id
+        and cp.policy_name = 'XE_SMOKE_DEFAULT'
+   );
 
   -- 7) Runtime seed: run + correlated events
   insert into md_run (
@@ -489,7 +497,7 @@ begin
     'SRC_ISSUER',
     '{"SECURITY_ID":2001,"ISSUER_ID":501}',
     'XE_HASH_SECURITY_2001',
-    systimestamp,
+    systimestamp - numtodsinterval(2, 'SECOND'),
     'XE_EVT_ISS_001',
     'NEW'
   ) returning change_event_id into l_evt_iss_id;
@@ -517,7 +525,7 @@ begin
     'SRC_PRICING',
     '{"SECURITY_ID":2001,"PRICE":99}',
     'XE_HASH_SECURITY_2001',
-    systimestamp,
+    systimestamp - numtodsinterval(1, 'SECOND'),
     'XE_EVT_PRC_001',
     'NEW'
   ) returning change_event_id into l_evt_prc_id;

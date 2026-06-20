@@ -11,10 +11,32 @@ declare
   l_blocked_result   md_expr_executor_pkg.computed_value_rec;
   l_disallowed_result md_expr_executor_pkg.computed_value_rec;
 begin
+  delete from md_expr_allowed_function
+   where tenant_id = 'TENANT_EXPR_VALID_SMOKE'
+     and context_id = 'CTX_EXPR_VALID_SMOKE';
+
+  insert into md_expr_allowed_function (
+    expr_allowed_function_id,
+    tenant_id,
+    context_id,
+    function_name,
+    active_flag,
+    created_by
+  ) values (
+    md_expr_allowed_function_seq.nextval,
+    'TENANT_EXPR_VALID_SMOKE',
+    'CTX_EXPR_VALID_SMOKE',
+    'ROUND',
+    'Y',
+    'smoke_068'
+  );
+
   l_ok_result := md_expr_executor_pkg.execute_expression(
-    p_rule_payload  => '{"expr":"round(PARAM.X + 1)","allowed_functions":["ROUND"],"disallow_subqueries":true}',
+    p_rule_payload  => '{"expr":"round(PARAM.X + 1)","disallow_subqueries":true}',
     p_source_values => '{}',
-    p_params_json   => '{"X":2}'
+    p_params_json   => '{"X":2}',
+    p_tenant_id     => 'TENANT_EXPR_VALID_SMOKE',
+    p_context_id    => 'CTX_EXPR_VALID_SMOKE'
   );
 
   dbms_output.put_line('ok_status=' || l_ok_result.value_status);
@@ -27,7 +49,9 @@ begin
   l_blocked_result := md_expr_executor_pkg.execute_expression(
     p_rule_payload  => '{"expr":"(select 1 from dual)","disallow_subqueries":true}',
     p_source_values => '{}',
-    p_params_json   => '{}'
+    p_params_json   => '{}',
+    p_tenant_id     => 'TENANT_EXPR_VALID_SMOKE',
+    p_context_id    => 'CTX_EXPR_VALID_SMOKE'
   );
 
   dbms_output.put_line('blocked_status=' || l_blocked_result.value_status);
@@ -41,7 +65,9 @@ begin
   l_disallowed_result := md_expr_executor_pkg.execute_expression(
     p_rule_payload  => '{"expr":"abs(PARAM.X)","allowed_functions":["ROUND"],"disallow_subqueries":true}',
     p_source_values => '{}',
-    p_params_json   => '{"X":2}'
+    p_params_json   => '{"X":2}',
+    p_tenant_id     => 'TENANT_EXPR_VALID_SMOKE',
+    p_context_id    => 'CTX_EXPR_VALID_SMOKE'
   );
 
   dbms_output.put_line('disallowed_status=' || l_disallowed_result.value_status);
@@ -52,9 +78,16 @@ begin
     raise_application_error(-20803, 'Expected FAILED validation for disallowed function ABS');
   end if;
 
+  delete from md_expr_allowed_function
+   where tenant_id = 'TENANT_EXPR_VALID_SMOKE'
+     and context_id = 'CTX_EXPR_VALID_SMOKE';
+
   dbms_output.put_line('expr_validator_smoke PASSED');
 exception
   when others then
+    delete from md_expr_allowed_function
+     where tenant_id = 'TENANT_EXPR_VALID_SMOKE'
+       and context_id = 'CTX_EXPR_VALID_SMOKE';
     dbms_output.put_line('expr_validator_smoke FAILED: ' || sqlerrm);
     raise;
 end;

@@ -52,11 +52,138 @@ declare
   l_snapshot_count_early number;
   l_snapshot_count_late  number;
 begin
+  -- Ensure rerunnable behavior when script is executed repeatedly.
+  dbms_output.put_line('[SMOKE_064] Starting cleanup phase...');
+  delete from md_run_target_action
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_target_value
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_impact_trace
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_selected_rule
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_source_snapshot
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_correlation_group
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_change_event_column_delta
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_change_event
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_parameter
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_parameter_snapshot
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_target_column_map
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_target_key_map
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_target_action
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_source_join
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_source_object
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_source_context
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_parameter_requirement
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_output
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule_input
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_rule
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_source_context_join
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_source_context_object
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_source_context
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_correlation_policy
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_key_component
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_key_definition
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_column
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_object
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_release
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  commit;
+  dbms_output.put_line('[SMOKE_064] Cleanup complete. Starting metadata inserts...');
+
   insert into md_release (
     release_id, tenant_id, context_id, release_name, semantic_version, status, created_by, published_at
   ) values (
     md_release_seq.nextval, l_tenant_id, l_context_id, 'PARAM_SMOKE_RELEASE_COMBINED', '1.0.0', 'PUBLISHED', 'param_smoke_combined', systimestamp
   ) returning release_id into l_release_id;
+
+  dbms_output.put_line('[SMOKE_064] Created release. Inserting metadata objects...');
 
   insert into md_object (object_id, tenant_id, context_id, release_id, system_name, schema_name, object_name, object_type)
   values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', 'SRC', 'SRC_SECURITY', 'TABLE')
@@ -235,6 +362,8 @@ begin
     p_context_id  => l_context_id,
     p_params_json => l_params_early
   );
+
+  dbms_output.put_line('[SMOKE_064] Setup complete. Executing early rule run...');
   l_result_early := md_rule_executor_pkg.execute_run(
     p_run_id          => l_run_id_early,
     p_change_event_id => l_evt_sec_id,
@@ -243,6 +372,8 @@ begin
     p_params_json     => l_params_early
   );
 
+  dbms_output.put_line('[SMOKE_064] Early run complete with status=' || l_result_early.run_status);
+  dbms_output.put_line('[SMOKE_064] Executing late rule run...');
   md_run_parameter_pkg.persist_run_parameters(
     p_run_id      => l_run_id_late,
     p_tenant_id   => l_tenant_id,
@@ -256,6 +387,9 @@ begin
     p_context_id      => l_context_id,
     p_params_json     => l_params_late
   );
+
+  dbms_output.put_line('[SMOKE_064] Late run complete with status=' || l_result_late.run_status);
+  dbms_output.put_line('[SMOKE_064] Running validation queries...');
 
   select max(v.computed_value_txt)
     into l_actual_early
@@ -345,8 +479,8 @@ begin
   if l_snapshot_count_early = 0 or l_snapshot_count_late = 0 then
     raise_application_error(-20406, 'Combined smoke failed: missing source snapshot');
   end if;
-
-  dbms_output.put_line('runtime_param_smoke_combined PASSED');
+   dbms_output.put_line('[SMOKE_064] All validations passed. Test complete.');
+   dbms_output.put_line('runtime_param_smoke_combined PASSED');
 exception
   when others then
     dbms_output.put_line('runtime_param_smoke_combined FAILED: ' || sqlerrm);

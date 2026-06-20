@@ -271,12 +271,7 @@ create or replace package body md_expr_executor_pkg as
   ) return computed_value_rec is
     l_result            computed_value_rec;
     l_payload_obj       json_object_t;
-    l_allowed_functions json_array_t;
-    l_disallow_subquery boolean := true;
-    l_validation_error  varchar2(4000);
     l_expr              varchar2(4000);
-    l_evaluable_expr    varchar2(4000);
-    l_computed_value    varchar2(4000);
   begin
     l_payload_obj := json_object_t.parse(p_rule_payload);
 
@@ -289,31 +284,48 @@ create or replace package body md_expr_executor_pkg as
       return l_result;
     end if;
 
-    begin
-      l_allowed_functions := l_payload_obj.get_array('allowed_functions');
-    exception
-      when others then
-        l_allowed_functions := null;
-    end;
+    return evaluate_expr(
+      p_expr          => l_expr,
+      p_source_values => p_source_values,
+      p_params_json   => p_params_json,
+      p_tenant_id     => p_tenant_id,
+      p_context_id    => p_context_id
+    );
+  exception
+    when others then
+      l_result.value_status := 'FAILED';
+      l_result.failure_reason := sqlerrm;
+      return l_result;
+  end execute_expression;
 
-    if l_allowed_functions is null then
-      l_allowed_functions := load_registry_allowed_functions(
-        p_tenant_id  => p_tenant_id,
-        p_context_id => p_context_id
-      );
+  function evaluate_expr(
+    p_expr          in varchar2,
+    p_source_values in clob,
+    p_params_json   in clob default null,
+    p_tenant_id     in varchar2 default null,
+    p_context_id    in varchar2 default null
+  ) return computed_value_rec is
+    l_result            computed_value_rec;
+    l_allowed_functions json_array_t;
+    l_validation_error  varchar2(4000);
+    l_evaluable_expr    varchar2(4000);
+    l_computed_value    varchar2(4000);
+  begin
+    if p_expr is null then
+      l_result.value_status := 'FAILED';
+      l_result.failure_reason := 'Expression is null';
+      return l_result;
     end if;
 
-    begin
-      l_disallow_subquery := l_payload_obj.get_boolean('disallow_subqueries');
-    exception
-      when others then
-        l_disallow_subquery := true;
-    end;
+    l_allowed_functions := load_registry_allowed_functions(
+      p_tenant_id  => p_tenant_id,
+      p_context_id => p_context_id
+    );
 
     l_validation_error := validate_expression_guardrails(
-      p_expr                => l_expr,
+      p_expr                => p_expr,
       p_allowed_functions   => l_allowed_functions,
-      p_disallow_subqueries => l_disallow_subquery
+      p_disallow_subqueries => true
     );
 
     if l_validation_error is not null then
@@ -322,11 +334,9 @@ create or replace package body md_expr_executor_pkg as
       return l_result;
     end if;
 
-    -- Substitute source and runtime parameter references.
-    l_evaluable_expr := substitute_source_references(l_expr, p_source_values);
+    l_evaluable_expr := substitute_source_references(p_expr, p_source_values);
     l_evaluable_expr := substitute_param_references(l_evaluable_expr, p_params_json);
 
-    -- Evaluate expression in SQL context after SRC substitution.
     begin
       execute immediate 'select ' || l_evaluable_expr || ' from dual' into l_computed_value;
 
@@ -346,7 +356,7 @@ create or replace package body md_expr_executor_pkg as
       l_result.value_status := 'FAILED';
       l_result.failure_reason := sqlerrm;
       return l_result;
-  end execute_expression;
+  end evaluate_expr;
 
 end md_expr_executor_pkg;
 /

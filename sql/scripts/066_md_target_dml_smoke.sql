@@ -116,7 +116,7 @@ begin
     'R_TGT_SMOKE_UPDATE_INSERT',
     'EXPRESSION',
     'PUBLISHED',
-    '{"expr":"SRC.ID"}',
+    '{}',
     'Y',
     'target_smoke'
   ) returning rule_id into l_rule_id;

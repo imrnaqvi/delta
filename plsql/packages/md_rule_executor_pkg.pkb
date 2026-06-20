@@ -183,21 +183,68 @@ create or replace package body md_rule_executor_pkg as
       o_gate_message := substr('Gate evaluation failed: ' || sqlerrm, 1, 4000);
   end evaluate_selection_gate;
 
+  function get_rule_output_value(
+    p_rule_output_values_json in clob,
+    p_output_key              in varchar2
+  ) return varchar2 is
+    l_obj  json_object_t;
+    l_elem json_element_t;
+  begin
+    if p_rule_output_values_json is null or p_output_key is null then
+      return null;
+    end if;
+
+    l_obj := json_object_t.parse(p_rule_output_values_json);
+    l_elem := l_obj.get(p_output_key);
+
+    if l_elem is null or l_elem.is_null then
+      return null;
+    elsif l_elem.is_string then
+      return l_obj.get_string(p_output_key);
+    elsif l_elem.is_number then
+      return to_char(l_obj.get_number(p_output_key));
+    elsif l_elem.is_boolean then
+      if l_obj.get_boolean(p_output_key) then
+        return 'Y';
+      else
+        return 'N';
+      end if;
+    else
+      return l_elem.to_string;
+    end if;
+  exception
+    when others then
+      return null;
+  end get_rule_output_value;
+
   function resolve_mapped_value(
     p_source_kind    in varchar2,
     p_source_expr    in clob,
     p_computed_value in computed_value_rec,
     p_source_values  in clob,
-    p_params_json    in clob
+    p_params_json    in clob,
+    p_rule_output_values_json in clob default null,
+    p_default_output_column   in varchar2 default null
   ) return varchar2 is
     l_expr varchar2(4000);
     l_sql  varchar2(4000);
     l_txt  varchar2(4000);
+    l_output_key varchar2(4000);
   begin
     case upper(p_source_kind)
       when 'COMPUTED_VALUE_JSON' then
         if p_computed_value.computed_value_json is not null then
           return dbms_lob.substr(p_computed_value.computed_value_json, 4000, 1);
+        end if;
+        l_txt := get_rule_output_value(p_rule_output_values_json, p_default_output_column);
+        if l_txt is not null then
+          return l_txt;
+        end if;
+        return p_computed_value.computed_value_txt;
+      when 'COMPUTED_VALUE_TXT' then
+        l_txt := get_rule_output_value(p_rule_output_values_json, p_default_output_column);
+        if l_txt is not null then
+          return l_txt;
         end if;
         return p_computed_value.computed_value_txt;
       when 'SOURCE_ALIAS' then
@@ -215,6 +262,14 @@ create or replace package body md_rule_executor_pkg as
       when 'LITERAL' then
         return substr(p_source_expr, 1, 4000);
       when 'RULE_OUTPUT' then
+        l_output_key := trim(substr(p_source_expr, 1, 4000));
+        if l_output_key is null then
+          l_output_key := p_default_output_column;
+        end if;
+        l_txt := get_rule_output_value(p_rule_output_values_json, l_output_key);
+        if l_txt is not null then
+          return l_txt;
+        end if;
         return p_computed_value.computed_value_txt;
       else
         return p_computed_value.computed_value_txt;
@@ -266,6 +321,72 @@ create or replace package body md_rule_executor_pkg as
     return to_char(l_hash_value);
   end generate_target_action_fingerprint;
 
+  procedure log_output_eval_failure_trace(
+    p_run_id             in number,
+    p_change_event_id    in number,
+    p_rule_id            in number,
+    p_target_column_name in varchar2,
+    p_output_expr        in varchar2,
+    p_failure_reason     in varchar2,
+    p_tenant_id          in varchar2,
+    p_context_id         in varchar2
+  ) is
+    l_key_json      clob;
+    l_action_json   clob;
+    l_bind_json     clob;
+    l_key_hash      varchar2(128);
+    l_fingerprint   varchar2(200);
+    l_token         varchar2(4000);
+  begin
+    l_key_json := '{'
+      || json_quote('ruleId') || ':' || json_quote(to_char(p_rule_id)) || ','
+      || json_quote('targetColumn') || ':' || json_quote(nvl(p_target_column_name, 'UNKNOWN'))
+      || '}';
+
+    l_action_json := '{'
+      || json_quote('traceType') || ':' || json_quote('OUTPUT_EVAL_FAILURE') || ','
+      || json_quote('outputExpr') || ':' || json_quote(substr(nvl(p_output_expr, ''), 1, 3900)) || ','
+      || json_quote('failureReason') || ':' || json_quote(substr(nvl(p_failure_reason, ''), 1, 3900))
+      || '}';
+
+    l_bind_json := '{'
+      || json_quote('tenantId') || ':' || json_quote(p_tenant_id) || ','
+      || json_quote('contextId') || ':' || json_quote(p_context_id)
+      || '}';
+
+    l_token := to_char(systimestamp, 'YYYYMMDDHH24MISSFF6');
+    l_key_hash := to_char(dbms_utility.get_hash_value(
+      to_char(p_run_id) || '|' || to_char(p_rule_id) || '|' || nvl(p_target_column_name, '') || '|' || l_token,
+      0,
+      2147483647
+    ));
+
+    l_fingerprint := generate_target_action_fingerprint(
+      p_run_id,
+      p_rule_id,
+      'UPDATE',
+      nvl(p_target_column_name, 'UNKNOWN'),
+      l_key_hash,
+      substr(nvl(p_failure_reason, ''), 1, 4000)
+    ) || ':' || l_token;
+
+    insert into md_run_target_action (
+      run_target_action_id, tenant_id, context_id, run_id, change_event_id, rule_id, target_object_id,
+      target_system_name, target_entity_name, target_key_json, target_key_hash, target_column_name,
+      action_type, action_payload_json, generated_sql_text, bind_payload_json, execution_status,
+      rows_affected, error_code, error_message, applied_flag, applied_at, action_fingerprint
+    ) values (
+      md_run_target_action_seq.nextval, p_tenant_id, p_context_id, p_run_id, p_change_event_id, p_rule_id,
+      null, 'TRACE', 'RULE_OUTPUT_EVAL', l_key_json, l_key_hash, p_target_column_name,
+      'UPDATE', l_action_json, p_output_expr, l_bind_json, 'FAILED',
+      0, -20090, substr(nvl(p_failure_reason, 'Unknown output evaluation failure'), 1, 4000),
+      'N', null, l_fingerprint
+    );
+  exception
+    when others then
+      log_error('Failed to write output-eval trace: ' || sqlerrm);
+  end log_output_eval_failure_trace;
+
   procedure apply_target_actions(
     p_run_id          in number,
     p_rule_id         in number,
@@ -275,6 +396,7 @@ create or replace package body md_rule_executor_pkg as
     p_source_values   in clob,
     p_params_json     in clob,
     p_computed_value  in computed_value_rec,
+    p_rule_output_values_json in clob,
     o_executed_count  out number,
     o_failed_count    out number,
     o_skipped_count   out number
@@ -389,7 +511,9 @@ create or replace package body md_rule_executor_pkg as
             key_rec.source_expr,
             p_computed_value,
             p_source_values,
-            p_params_json
+            p_params_json,
+            p_rule_output_values_json,
+            null
           );
           l_key_value := normalize_target_value(l_key_value);
 
@@ -413,7 +537,9 @@ create or replace package body md_rule_executor_pkg as
             col_rec.value_expr,
             p_computed_value,
             p_source_values,
-            p_params_json
+            p_params_json,
+            p_rule_output_values_json,
+            col_rec.column_name
           );
           l_target_value := normalize_target_value(l_target_value);
 
@@ -449,7 +575,9 @@ create or replace package body md_rule_executor_pkg as
                 key_rec.source_expr,
                 p_computed_value,
                 p_source_values,
-                p_params_json
+                p_params_json,
+                p_rule_output_values_json,
+                null
               )));
             else
               l_insert_columns := l_insert_columns || ', ' || key_rec.column_name;
@@ -458,7 +586,9 @@ create or replace package body md_rule_executor_pkg as
                 key_rec.source_expr,
                 p_computed_value,
                 p_source_values,
-                p_params_json
+                p_params_json,
+                p_rule_output_values_json,
+                null
               )));
             end if;
           end loop;
@@ -472,7 +602,7 @@ create or replace package body md_rule_executor_pkg as
 
           if upper(l_action_type) in ('UPDATE','INSERT') then
             if upper(l_action_type) = 'UPDATE' then
-              l_sql := 'update ' || l_schema_name || '.' || l_object_name || ' set ' || l_column_name || ' = ' || enquote_value(l_target_value) || ' where ';
+              l_sql := 'update ' || l_schema_name || '.' || l_object_name || ' set ' || col_rec.column_name || ' = ' || enquote_value(l_target_value) || ' where ';
 
               declare
                 l_first boolean := true;
@@ -486,7 +616,9 @@ create or replace package body md_rule_executor_pkg as
                     key_rec.source_expr,
                     p_computed_value,
                     p_source_values,
-                    p_params_json
+                    p_params_json,
+                    p_rule_output_values_json,
+                    null
                   );
                   l_key_value := normalize_target_value(l_key_value);
                   l_sql := l_sql || key_rec.column_name || ' = ' || enquote_value(l_key_value);
@@ -557,11 +689,18 @@ create or replace package body md_rule_executor_pkg as
     p_context_id   in varchar2,
     o_rule_name    out varchar2,
     o_rule_type    out varchar2,
-    o_rule_payload out clob
+    o_rule_payload out clob,
+    o_output_eval_failure_policy out varchar2
   ) is
   begin
-    select rule_name, rule_type, rule_payload
-      into o_rule_name, o_rule_type, o_rule_payload
+    select rule_name,
+           rule_type,
+           rule_payload,
+           nvl(output_eval_failure_policy, 'CONTINUE')
+      into o_rule_name,
+           o_rule_type,
+           o_rule_payload,
+           o_output_eval_failure_policy
       from md_rule
      where rule_id = p_rule_id
        and tenant_id = p_tenant_id
@@ -750,11 +889,13 @@ create or replace package body md_rule_executor_pkg as
     l_rule_name         varchar2(200);
     l_rule_type         varchar2(40);
     l_rule_payload      clob;
+    l_output_eval_failure_policy varchar2(20);
     l_source_values     clob;
     l_computed_value    computed_value_rec;
     l_change_event_id   number;
     l_rule_inputs       clob;
     l_rule_outputs      clob;
+    l_rule_output_values_json clob;
     l_output_columns    sys.odcivarchar2list;
     l_row_count         pls_integer;
     l_params_json       clob;
@@ -763,6 +904,8 @@ create or replace package body md_rule_executor_pkg as
     l_target_skipped    number;
     l_gate_status       varchar2(20);
     l_gate_message      varchar2(4000);
+    l_output_values_obj json_object_t;
+    l_any_output_failed boolean;
 
     cursor c_selected_rules is
       select run_selected_rule_id, rule_id, transitive_flag
@@ -814,6 +957,14 @@ create or replace package body md_rule_executor_pkg as
       p_purge_existing  => 'Y'
     );
 
+    md_source_context_resolver_pkg.prefetch_selected_contexts(
+      p_run_id          => p_run_id,
+      p_change_event_id => l_change_event_id,
+      p_tenant_id       => p_tenant_id,
+      p_context_id      => p_context_id,
+      p_params_json     => l_params_json
+    );
+
     -- Iterate selected rules
     for rec in c_selected_rules loop
       l_result.metrics.rules_selected := l_result.metrics.rules_selected + 1;
@@ -829,7 +980,7 @@ create or replace package body md_rule_executor_pkg as
         );
 
         -- Resolve source context per rule (supports multi-entity context graphs).
-        l_source_values := md_source_context_resolver_pkg.resolve_rule_source_values(
+        l_source_values := md_source_context_resolver_pkg.get_prefetched_rule_source_values(
           p_run_id          => p_run_id,
           p_change_event_id => l_change_event_id,
           p_rule_id         => l_rule_id,
@@ -838,8 +989,52 @@ create or replace package body md_rule_executor_pkg as
           p_params_json     => l_params_json
         );
 
+        begin
+          insert into md_impact_trace (
+            impact_trace_id,
+            tenant_id,
+            context_id,
+            run_id,
+            change_event_id,
+            source_ref_json,
+            rule_ref_json,
+            target_ref_json
+          ) values (
+            md_impact_trace_seq.nextval,
+            p_tenant_id,
+            p_context_id,
+            p_run_id,
+            l_change_event_id,
+            json_object(
+              'diagnostic_type' value 'RULE_SOURCE_VALUES',
+              'rule_id' value l_rule_id
+              returning clob
+            ),
+            json_object(
+              'stage' value 'EXECUTE_RUN',
+              'step' value 'RESOLVED_SOURCE_VALUES'
+              returning clob
+            ),
+            json_object(
+              'source_values' value l_source_values
+              returning clob
+            )
+          );
+        exception
+          when others then
+            null;
+        end;
+
         -- Fetch rule metadata
-        fetch_rule(l_rule_id, p_tenant_id, p_context_id, l_rule_name, l_rule_type, l_rule_payload);
+        fetch_rule(
+          l_rule_id,
+          p_tenant_id,
+          p_context_id,
+          l_rule_name,
+          l_rule_type,
+          l_rule_payload,
+          l_output_eval_failure_policy
+        );
         fetch_rule_inputs(l_rule_id, p_tenant_id, p_context_id, l_rule_inputs);
         fetch_rule_outputs(l_rule_id, p_tenant_id, p_context_id, l_rule_outputs);
 
@@ -872,32 +1067,60 @@ create or replace package body md_rule_executor_pkg as
           continue;
         end if;
 
-        -- Dispatch execution
-        l_computed_value := dispatch_rule_execution(
-          p_rule_id       => l_rule_id,
-          p_rule_type     => l_rule_type,
-          p_rule_name     => l_rule_name,
-          p_rule_payload  => l_rule_payload,
-          p_source_values => l_source_values,
-          p_params_json   => l_params_json,
-          p_tenant_id     => p_tenant_id,
-          p_context_id    => p_context_id
-        );
-
         l_result.metrics.rules_executed := l_result.metrics.rules_executed + 1;
+
+        if l_rule_type <> 'EXPRESSION' then
+          l_result.error_messages.extend;
+          l_result.error_messages(l_result.error_messages.last) :=
+            'Rule type not supported for output_expr evaluation: rule_id=' || l_rule_id || ', rule_type=' || l_rule_type;
+          continue;
+        end if;
+
+        l_output_values_obj := json_object_t();
+        l_any_output_failed := false;
+        l_rule_output_values_json := null;
 
         -- Persist results per output column
         if l_rule_outputs is not null then
           for out_rec in (
-            select jt.target_column_name
+            select jt.target_column_name,
+                   jt.output_expr
               from json_table(
                      l_rule_outputs,
                      '$[*]'
                      columns (
-                       target_column_name varchar2(128) path '$.target_column_name'
+                       target_column_name varchar2(128) path '$.target_column_name',
+                       output_expr varchar2(4000) path '$.output_expr'
                      )
                    ) jt
           ) loop
+            if out_rec.output_expr is null then
+              l_computed_value.computed_value_txt := null;
+              l_computed_value.computed_value_json := null;
+              l_computed_value.value_data_type := null;
+              l_computed_value.value_status := 'FAILED';
+              l_computed_value.failure_reason :=
+                'Output expression missing for target column: ' || out_rec.target_column_name;
+            else
+              declare
+                l_expr_result md_expr_executor_pkg.computed_value_rec;
+              begin
+                l_expr_result := md_expr_executor_pkg.evaluate_expr(
+                  p_expr          => out_rec.output_expr,
+                  p_source_values => l_source_values,
+                  p_params_json   => l_params_json,
+                  p_tenant_id     => p_tenant_id,
+                  p_context_id    => p_context_id
+                );
+
+                l_computed_value.computed_value_txt := l_expr_result.computed_value_txt;
+                l_computed_value.computed_value_json := l_expr_result.computed_value_json;
+                l_computed_value.value_data_type := l_expr_result.value_data_type;
+                l_computed_value.value_status := l_expr_result.value_status;
+                l_computed_value.failure_reason := l_expr_result.failure_reason;
+              end;
+            end if;
+
             persist_target_value(
               p_run_id,
               l_rule_id,
@@ -909,12 +1132,40 @@ create or replace package body md_rule_executor_pkg as
 
             if l_computed_value.value_status = 'COMPUTED' then
               l_result.metrics.values_computed := l_result.metrics.values_computed + 1;
+              l_output_values_obj.put(out_rec.target_column_name, l_computed_value.computed_value_txt);
             elsif l_computed_value.value_status = 'SKIPPED' then
               l_result.metrics.values_skipped := l_result.metrics.values_skipped + 1;
             else
+              l_any_output_failed := true;
               l_result.metrics.values_failed := l_result.metrics.values_failed + 1;
+
+              log_output_eval_failure_trace(
+                p_run_id             => p_run_id,
+                p_change_event_id    => l_change_event_id,
+                p_rule_id            => l_rule_id,
+                p_target_column_name => out_rec.target_column_name,
+                p_output_expr        => out_rec.output_expr,
+                p_failure_reason     => l_computed_value.failure_reason,
+                p_tenant_id          => p_tenant_id,
+                p_context_id         => p_context_id
+              );
+
+              if upper(nvl(l_output_eval_failure_policy, 'CONTINUE')) = 'FAIL_RULE' then
+                l_result.error_messages.extend;
+                l_result.error_messages(l_result.error_messages.last) :=
+                  'Output evaluation failed: rule_id=' || l_rule_id ||
+                  ', target_column=' || out_rec.target_column_name ||
+                  ', error=' || nvl(l_computed_value.failure_reason, 'UNKNOWN');
+                exit;
+              end if;
             end if;
           end loop;
+
+          l_rule_output_values_json := l_output_values_obj.to_clob;
+        end if;
+
+        if l_any_output_failed and upper(nvl(l_output_eval_failure_policy, 'CONTINUE')) = 'FAIL_RULE' then
+          continue;
         end if;
 
         apply_target_actions(
@@ -926,6 +1177,7 @@ create or replace package body md_rule_executor_pkg as
           p_source_values   => l_source_values,
           p_params_json     => l_params_json,
           p_computed_value  => l_computed_value,
+          p_rule_output_values_json => l_rule_output_values_json,
           o_executed_count  => l_target_executed,
           o_failed_count    => l_target_failed,
           o_skipped_count   => l_target_skipped
@@ -975,9 +1227,18 @@ create or replace package body md_rule_executor_pkg as
     l_rule_name    varchar2(200);
     l_rule_type    varchar2(40);
     l_rule_payload clob;
+    l_output_eval_failure_policy varchar2(20);
     l_result       computed_value_rec;
   begin
-    fetch_rule(p_rule_id, p_tenant_id, p_context_id, l_rule_name, l_rule_type, l_rule_payload);
+    fetch_rule(
+      p_rule_id,
+      p_tenant_id,
+      p_context_id,
+      l_rule_name,
+      l_rule_type,
+      l_rule_payload,
+      l_output_eval_failure_policy
+    );
     l_result := dispatch_rule_execution(
       p_rule_id       => p_rule_id,
       p_rule_type     => l_rule_type,

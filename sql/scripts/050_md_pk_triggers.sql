@@ -111,6 +111,15 @@ begin
 end;
 /
 
+create or replace trigger md_source_context_pred_bi_trg
+before insert on md_source_context_predicate
+for each row
+when (new.source_context_predicate_id is null)
+begin
+  :new.source_context_predicate_id := md_source_context_predicate_seq.nextval;
+end;
+/
+
 create or replace trigger md_rule_source_context_bi_trg
 before insert on md_rule_source_context
 for each row
@@ -315,6 +324,15 @@ for each row
 when (new.run_source_snapshot_id is null)
 begin
   :new.run_source_snapshot_id := md_run_source_snapshot_seq.nextval;
+end;
+/
+
+create or replace trigger md_run_context_snapshot_bi_trg
+before insert on md_run_context_snapshot
+for each row
+when (new.run_context_snapshot_id is null)
+begin
+  :new.run_context_snapshot_id := md_run_context_snapshot_seq.nextval;
 end;
 /
 

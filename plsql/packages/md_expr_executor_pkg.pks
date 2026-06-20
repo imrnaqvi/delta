@@ -28,6 +28,25 @@ create or replace package md_expr_executor_pkg as
   );
 
   /**
+   * Evaluate a single expression string using SRC/PARAM substitution and
+   * registry-governed function guardrails.
+   *
+   * @param p_expr Expression text to evaluate
+   * @param p_source_values Source column values as JSON object
+   * @param p_params_json Runtime parameters as JSON object (PARAM.*)
+   * @param p_tenant_id Optional tenant scope for registry allowlist
+   * @param p_context_id Optional context scope for registry allowlist
+   * @return computed_value_rec
+   */
+  function evaluate_expr(
+    p_expr          in varchar2,
+    p_source_values in clob,
+    p_params_json   in clob default null,
+    p_tenant_id     in varchar2 default null,
+    p_context_id    in varchar2 default null
+  ) return computed_value_rec;
+
+  /**
    * Execute EXPRESSION rule.
    *
    * @param p_rule_payload rule_payload JSON with "expr" field
