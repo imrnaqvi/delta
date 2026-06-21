@@ -6,7 +6,7 @@ create or replace package md_rule_executor_pkg as
    * Handles selective rule execution, computed value storage, and audit logging.
    *
    * Core Responsibilities:
-   *   1. Dispatch rule execution by rule_type (EXPRESSION, LOOKUP, COLUMN_TO_ROW, PLSQL_FUNC)
+  *   1. Dispatch rule execution by rule_type (EXPRESSION, LOOKUP, COLUMN_TO_ROW, PLSQL_FUNC, SQL_SELECT)
    *   2. Execute selected rules for a specific md_run
    *   3. Persist computed values to md_run_target_value with idempotency
    *   4. Log impact traces (source → rule → target lineage)

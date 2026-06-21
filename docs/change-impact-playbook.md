@@ -6,7 +6,7 @@
 
 | Change Area | Directly Impacted Packages | Smoke Scripts To Re-run |
 |---|---|---|
-| md_rule (including rule_priority_no), md_rule_input, md_rule_output, md_rule_input_expr | md_rule_executor_pkg, md_rule_selector_pkg, md_source_context_resolver_pkg | 060, 061, 064, 066, 067, 073 |
+| md_rule (including rule_priority_no and SQL_SELECT rule_type), md_rule_input, md_rule_output, md_rule_input_expr | md_rule_executor_pkg, md_rule_selector_pkg, md_source_context_resolver_pkg | 060, 061, 064, 066, 067, 073, 074 |
 | md_rule_dependency | md_rule_selector_pkg | 060, 067 |
 | md_rule_parameter_requirement, md_run_parameter* | md_run_parameter_pkg, md_rule_executor_pkg, md_source_context_resolver_pkg | 064 (canonical), 062/063 wrappers |
 | md_source_context*, md_source_context_predicate, md_rule_source_context | md_source_context_resolver_pkg, md_rule_executor_pkg | 061, 064 |
@@ -40,6 +40,7 @@
 | Source-context resolution changes | Re-run 061 and verify expected derived value and run status |
 | Scalar source projection (md_rule_input_expr) changes | Re-run 061 and 064; verify projected aliases appear in run source/context snapshots and downstream rule behavior |
 | output_eval_failure_policy behavior changes | Re-run 066 and inspect md_run_target_action failure traces |
+| SQL_SELECT payload/guardrail/cardinality changes | Re-run 074 and validate 4 success paths plus expected blocked/zero-row/multi-row failures |
 | Target consolidation precedence/execution changes | Re-run 066 and 073; validate winners-only artifact, execution_phase=CONSOLIDATED_EXECUTION, and deterministic precedence (nvl(priority,0) desc, rule_id desc) |
 | Selector logic changes | Re-run 060 and verify selection counts/reasons |
 | Expr governance changes | Re-run 068 and 069 |
@@ -52,6 +53,13 @@
 3. Add branch in md_rule_executor_pkg.dispatch_rule_execution.
 4. Add smoke script for happy path and failure path.
 5. Validate with 066/067 plus new smoke.
+
+### Add A SQL_SELECT Rule
+1. Ensure 036_md_sql_select_rule_upgrade.sql is applied in the target environment.
+2. Insert md_rule with rule_type='SQL_SELECT' and JSON payload containing sql_query.
+3. Keep md_rule_input coverage for selector eligibility (direct-column selection still uses md_rule_input).
+4. Configure target action/key/value mappings as usual.
+5. Validate with 074 and then regression sequence.
 
 ### Add A New Source Context Mapping
 1. Insert md_source_context row.
@@ -94,6 +102,7 @@
 6. sql/scripts/067_md_rule_selection_gate_smoke.sql
 7. sql/scripts/068_md_expr_validator_smoke.sql
 8. sql/scripts/069_md_expr_function_registry_smoke.sql
+9. sql/scripts/074_md_sql_select_rule_smoke.sql
 
 Expected pass criteria:
 - No raise_application_error in each script.
@@ -126,3 +135,5 @@ Expected pass criteria:
 - sql/scripts/020_md_runtime.sql
 - sql/scripts/034_md_rule_priority_upgrade.sql
 - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql
+- sql/scripts/036_md_sql_select_rule_upgrade.sql
+- sql/scripts/074_md_sql_select_rule_smoke.sql

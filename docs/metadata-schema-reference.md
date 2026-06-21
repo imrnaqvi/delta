@@ -6,7 +6,7 @@
 
 | Table | Purpose | Key Columns | Critical Columns Used In Code | Read/Write Packages | Lifecycle Stage | Breaking Change Risk |
 |---|---|---|---|---|---|---|
-| md_rule | Rule definitions | rule_id (PK), tenant_id, context_id, release_id | rule_type, rule_payload, output_eval_failure_policy, selection_gate_expr, selection_gate_enabled_flag, active_flag, status, rule_priority_no | R: md_rule_executor_pkg, md_rule_selector_pkg; W: smoke scripts | Design-time metadata | High |
+| md_rule | Rule definitions | rule_id (PK), tenant_id, context_id, release_id | rule_type (includes SQL_SELECT via 036), rule_payload (JSON; SQL_SELECT uses sql_query and enable_token_substitution), output_eval_failure_policy, selection_gate_expr, selection_gate_enabled_flag, active_flag, status, rule_priority_no | R: md_rule_executor_pkg, md_rule_selector_pkg; W: smoke scripts | Design-time metadata | High |
 | md_rule_input | Source inputs per rule | rule_input_id (PK), rule_id, source_column_id | required_flag, output_alias | R: md_rule_executor_pkg, md_rule_selector_pkg, md_source_context_resolver_pkg; W: smoke scripts | Design-time metadata | High |
 | md_rule_input_expr | Rule-scoped scalar source projections | rule_input_expr_id (PK), rule_id, output_alias | scalar_expr, expression_order_no, required_flag, active_flag | R: md_source_context_resolver_pkg; W: upgrade script and metadata seed scripts | Design-time metadata | High |
 | md_rule_output | Output expressions per rule | rule_output_id (PK), rule_id, target_column_id | output_expr | R: md_rule_executor_pkg; W: smoke scripts | Design-time metadata | High |
@@ -46,6 +46,7 @@
 - Incremental scalar-projection metadata upgrade is defined in sql/scripts/033_md_rule_input_expr_upgrade.sql.
 - Incremental rule-priority metadata upgrade is defined in sql/scripts/034_md_rule_priority_upgrade.sql.
 - Incremental consolidation runtime upgrade is defined in sql/scripts/035_md_target_consolidation_runtime_upgrade.sql.
+- Incremental SQL_SELECT rule-type enablement is defined in sql/scripts/036_md_sql_select_rule_upgrade.sql.
 - For tables above, data types should be taken from those scripts when implementing changes.
 
 ## Suggested Improvements
@@ -59,9 +60,10 @@
 - sql/scripts/034_md_rule_priority_upgrade.sql :: md_rule.rule_priority_no
 - sql/scripts/020_md_runtime.sql :: md_run, md_run_parameter, md_run_parameter_snapshot, md_change_event, md_change_event_column_delta, md_run_selected_rule, md_run_source_snapshot, md_run_context_snapshot, md_run_target_value, md_run_target_action, md_impact_trace
 - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql :: md_run_target_consolidation, md_run_target_consolidated_value, md_run_target_action.execution_phase, md_run_target_action.run_target_consolidation_id
+- sql/scripts/036_md_sql_select_rule_upgrade.sql :: md_rule.rule_type constraint update for SQL_SELECT and rule_payload comment contract
 - plsql/packages/md_rule_executor_pkg.pkb :: fetch_rule, fetch_rule_inputs, fetch_rule_outputs, evaluate_selection_gate, consolidate_rule_actions, execute_consolidated_actions_for_run, persist_target_value, log_impact_trace
 - plsql/packages/md_source_context_resolver_pkg.pkb :: resolve_rule_source_values, build_context_projection_json, prefetch_selected_contexts, get_prefetched_rule_source_values
 - plsql/packages/md_rule_selector_pkg.pkb :: populate_selected_rules
 - plsql/packages/md_run_parameter_pkg.pkb :: load_run_parameters, persist_run_parameters, validate_required_parameters
 - plsql/packages/md_expr_executor_pkg.pkb :: load_registry_allowed_functions
-- sql/scripts/061_md_cross_entity_context_smoke.sql, sql/scripts/064_md_runtime_params_smoke_combined.sql, sql/scripts/066_md_target_dml_smoke.sql, sql/scripts/067_md_rule_selection_gate_smoke.sql, sql/scripts/068_md_expr_validator_smoke.sql, sql/scripts/069_md_expr_function_registry_smoke.sql, sql/scripts/073_md_target_consolidation_smoke.sql :: runtime usage and validation expectations
+- sql/scripts/061_md_cross_entity_context_smoke.sql, sql/scripts/064_md_runtime_params_smoke_combined.sql, sql/scripts/066_md_target_dml_smoke.sql, sql/scripts/067_md_rule_selection_gate_smoke.sql, sql/scripts/068_md_expr_validator_smoke.sql, sql/scripts/069_md_expr_function_registry_smoke.sql, sql/scripts/073_md_target_consolidation_smoke.sql, sql/scripts/074_md_sql_select_rule_smoke.sql :: runtime usage and validation expectations

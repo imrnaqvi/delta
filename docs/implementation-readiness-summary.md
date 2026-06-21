@@ -3,11 +3,14 @@
 ## Current Behavior Snapshot
 - The repository has a clear metadata/runtime split (010 core, 020 runtime) and a package orchestration path centered on execute_run.
 - Coverage exists for selector, cross-entity context, runtime parameters, target DML, consolidation precedence, gate evaluation, expression validator, and expression function registry via smoke scripts 060-069 plus 073.
+- Coverage exists for selector, cross-entity context, runtime parameters, target DML, consolidation precedence, gate evaluation, expression validator, expression function registry, and SQL_SELECT standalone rules via smoke scripts 060-069 plus 073 and 074.
 - Runtime diagnostics persist to md_run_target_action and md_impact_trace, including generated SQL traces for context projection and rule source snapshot diagnostics.
 - Resolver supports rule-scoped scalar source projection expressions via md_rule_input_expr and merges projected aliases into the same JSON payload used for rule execution.
+- SQL_SELECT execution is implemented via md_rule.rule_type='SQL_SELECT' with JSON payload field sql_query, query-only guardrails, one-row cardinality contract, and alias-derived output persistence.
 - Target consolidation is implemented with winners-only runtime artifacts and consolidated-only final execution.
 - Deterministic precedence is implemented via nvl(md_rule.rule_priority_no, 0) desc then rule_id desc.
 - Dedicated consolidation smoke coverage exists in sql/scripts/073_md_target_consolidation_smoke.sql.
+- Dedicated SQL_SELECT smoke coverage exists in sql/scripts/074_md_sql_select_rule_smoke.sql.
 
 ## Top 10 Hardening/Refactor Opportunities
 
@@ -63,3 +66,5 @@
 - sql/scripts/073_md_target_consolidation_smoke.sql
 - sql/scripts/034_md_rule_priority_upgrade.sql
 - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql
+- sql/scripts/036_md_sql_select_rule_upgrade.sql
+- sql/scripts/074_md_sql_select_rule_smoke.sql

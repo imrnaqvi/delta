@@ -12,6 +12,22 @@ This index links the implementation-grade documentation set for the Oracle metad
 6. [Change Impact Playbook](docs/change-impact-playbook.md)
 7. [Implementation Readiness Summary](docs/implementation-readiness-summary.md)
 
+## Design And Implementation Docs
+
+1. [Standalone SELECT Rule Design](docs/standalone-select-rule-design.md)
+2. [Standalone SELECT Rule Implementation Spec](docs/standalone-select-rule-implementation-spec.md)
+
+## SQL_SELECT At A Glance
+
+1. Metadata upgrade script: [sql/scripts/036_md_sql_select_rule_upgrade.sql](sql/scripts/036_md_sql_select_rule_upgrade.sql)
+2. Smoke validation script: [sql/scripts/074_md_sql_select_rule_smoke.sql](sql/scripts/074_md_sql_select_rule_smoke.sql)
+3. Runtime package entry points:
+  - [dispatch_rule_execution in md_rule_executor_pkg.pkb](plsql/packages/md_rule_executor_pkg.pkb#L1863)
+  - [validate_sql_select_query in md_rule_executor_pkg.pkb](plsql/packages/md_rule_executor_pkg.pkb#L325)
+  - [apply_sql_select_tokens in md_rule_executor_pkg.pkb](plsql/packages/md_rule_executor_pkg.pkb#L354)
+  - [execute_sql_select_to_json in md_rule_executor_pkg.pkb](plsql/packages/md_rule_executor_pkg.pkb#L372)
+  - [SQL_SELECT branch inside execute_run in md_rule_executor_pkg.pkb](plsql/packages/md_rule_executor_pkg.pkb#L2037)
+
 ## Recommended Read Order By Role
 
 ### Business/Functional Analyst
@@ -48,6 +64,7 @@ Primary sequence:
 6. sql/scripts/067_md_rule_selection_gate_smoke.sql
 7. sql/scripts/068_md_expr_validator_smoke.sql
 8. sql/scripts/069_md_expr_function_registry_smoke.sql
+9. sql/scripts/074_md_sql_select_rule_smoke.sql
 
 Wrapper scripts:
 1. sql/scripts/062_md_runtime_params_smoke.sql
@@ -64,3 +81,4 @@ Cleanup helper:
   - sql/scripts/020_md_runtime.sql
   - sql/scripts/034_md_rule_priority_upgrade.sql
   - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql
+  - sql/scripts/036_md_sql_select_rule_upgrade.sql

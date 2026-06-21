@@ -26,6 +26,9 @@
 | Routine | Purpose | Side Effects |
 |---|---|---|
 | evaluate_selection_gate | Evaluates md_rule.selection_gate_expr after token substitution | Updates output status/message via caller update on md_run_selected_rule |
+| validate_sql_select_query | Validates SQL_SELECT payload query-only guardrails | Raises application errors for guardrail/cardinality preconditions |
+| apply_sql_select_tokens | Applies SRC/alias/PARAM/OLD/NEW substitutions to SQL_SELECT query text | None |
+| execute_sql_select_to_json | Executes SQL_SELECT query and returns one-row alias/value JSON | Raises on zero/multi-row or alias conflicts |
 | consolidate_rule_actions | Builds/merges winner candidates into consolidated runtime artifacts | Writes md_run_target_consolidation and md_run_target_consolidated_value |
 | execute_consolidated_actions_for_run | Executes final UPDATE/INSERT from consolidated winners only | Target table DML via execute immediate; writes md_run_target_action with execution_phase=CONSOLIDATED_EXECUTION |
 | upsert_target_consolidation | Ensures consolidation header exists and status is updated | Writes md_run_target_consolidation |
@@ -96,7 +99,7 @@
 
 ## Evidence References
 - plsql/packages/md_rule_executor_pkg.pks :: execute_run, execute_rule, persist_target_value, log_impact_trace, update_run_status, generate_fingerprint, record types
-- plsql/packages/md_rule_executor_pkg.pkb :: evaluate_selection_gate, consolidate_rule_actions, execute_consolidated_actions_for_run, upsert_target_consolidation, upsert_consolidated_winner, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value
+- plsql/packages/md_rule_executor_pkg.pkb :: evaluate_selection_gate, validate_sql_select_query, apply_sql_select_tokens, execute_sql_select_to_json, consolidate_rule_actions, execute_consolidated_actions_for_run, upsert_target_consolidation, upsert_consolidated_winner, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value
 - plsql/packages/md_rule_selector_pkg.pks and plsql/packages/md_rule_selector_pkg.pkb :: populate_selected_rules
 - plsql/packages/md_source_context_resolver_pkg.pks and plsql/packages/md_source_context_resolver_pkg.pkb :: resolve_rule_source_values, prefetch_selected_contexts, get_prefetched_rule_source_values
 - sql/scripts/033_md_rule_input_expr_upgrade.sql :: md_rule_input_expr metadata structure

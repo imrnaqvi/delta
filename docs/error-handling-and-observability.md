@@ -8,6 +8,8 @@
 |---|---|---|
 | md_rule_executor_pkg.execute_run | Catch-all per rule and top-level | Per-rule failure appends error_messages and continues; top-level sets run_status FAILED |
 | md_rule_executor_pkg.evaluate_selection_gate | Catch-all -> ERROR status | Returns gate_eval_status=ERROR and gate_eval_message |
+| md_rule_executor_pkg.validate_sql_select_query | Explicit raise_application_error | Raises -20803 for query-shape/guardrail violations |
+| md_rule_executor_pkg.execute_sql_select_to_json | Explicit raise_application_error + catch-all re-raise | Raises -20804 zero-row, -20805 multi-row, -20806 alias issues |
 | md_rule_executor_pkg.consolidate_rule_actions | Per-action and per-column block catch-all | Increments failed counter; marks consolidation header PARTIAL when needed |
 | md_rule_executor_pkg.execute_consolidated_actions_for_run | Per-winner block catch-all | Increments failed/skipped counters; writes consolidated FAILED action rows |
 | md_rule_executor_pkg.persist_target_value | Catch-all with re-raise | Logs then raises |
@@ -32,6 +34,11 @@
 | -20011 | md_rule_executor_pkg.apply_target_actions | Target row not found for update |
 | -20012 | md_rule_executor_pkg.apply_target_actions | Insert column list build failure |
 | -20071 | md_rule_executor_pkg.execute_consolidated_actions_for_run | Target row not found for consolidated action |
+| -20802 | md_rule_executor_pkg.extract_sql_select_query | SQL_SELECT payload missing sql_query |
+| -20803 | md_rule_executor_pkg.validate_sql_select_query | SQL_SELECT guardrail violation / non-query statement shape |
+| -20804 | md_rule_executor_pkg.execute_sql_select_to_json | SQL_SELECT returned zero rows |
+| -20805 | md_rule_executor_pkg.execute_sql_select_to_json | SQL_SELECT returned multiple rows |
+| -20806 | md_rule_executor_pkg.execute_sql_select_to_json, execute_run | SQL_SELECT output alias issue (unnamed/duplicate/no columns) |
 | -20021 | md_rule_selector_pkg.populate_selected_rules | Run not found |
 | -20031 | md_source_context_resolver_pkg.resolve_rule_source_values | Change event not found |
 | -20032 | md_source_context_resolver_pkg.resolve_rule_source_values | Required context alias missing |
@@ -54,6 +61,7 @@
 | Table | Produced By | Payload Convention |
 |---|---|---|
 | md_impact_trace | md_rule_executor_pkg.log_impact_trace; md_source_context_resolver_pkg.build_context_projection_json; execute_run diagnostic insert for RULE_SOURCE_VALUES | JSON blobs in source_ref_json/rule_ref_json/target_ref_json; resolver uses diagnostic_type=SOURCE_CONTEXT_SQL and RULE_SCALAR_EXPR_SKIPPED; executor logs diagnostic_type=RULE_SOURCE_VALUES |
+| md_impact_trace (SQL_SELECT diagnostic rows) | md_rule_executor_pkg.execute_run | diagnostic_type=SQL_SELECT_SQL_TEXT payload with SQL text snapshot for executed SQL_SELECT rules |
 | md_run_target_action | md_rule_executor_pkg.execute_consolidated_actions_for_run; md_rule_executor_pkg.log_output_eval_failure_trace | execution_status, generated_sql_text, bind_payload_json, error_code/error_message, action_fingerprint, execution_phase, run_target_consolidation_id |
 | md_run_target_value | md_rule_executor_pkg.persist_target_value | computed_value_txt/json, value_status, value_fingerprint |
 | md_run_target_consolidation | md_rule_executor_pkg.upsert_target_consolidation | consolidation_status, winning_value_count, source_rule_count |
@@ -81,6 +89,7 @@
    - expr guardrails: 068
    - function registry: 069
    - consolidation: 073
+   - SQL_SELECT: 074
 
 ## Suggested Improvements
 - Add severity and subsystem fields to md_impact_trace payload convention for easier filtering.
@@ -107,3 +116,5 @@
 - sql/scripts/020_md_runtime.sql :: md_impact_trace, md_run_target_action, md_run_target_value, md_run_selected_rule
 - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql :: md_run_target_consolidation, md_run_target_consolidated_value, md_run_target_action consolidation columns
 - sql/scripts/073_md_target_consolidation_smoke.sql
+- sql/scripts/036_md_sql_select_rule_upgrade.sql
+- sql/scripts/074_md_sql_select_rule_smoke.sql

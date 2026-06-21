@@ -4,12 +4,13 @@
 
 ### System Intent
 - The engine resolves metadata-defined rules for a run and computes/persists target outcomes per selected change event.
-- Rule execution is orchestrated by a central package that performs rule selection, context resolution, gate evaluation, output expression evaluation, per-rule audit persistence, target consolidation, consolidated target execution, and trace logging.
+- Rule execution is orchestrated by a central package that performs rule selection, context resolution, gate evaluation, output expression or SQL_SELECT evaluation, per-rule audit persistence, target consolidation, consolidated target execution, and trace logging.
 - Source-context prefetch now supports rule-scoped scalar projection expressions (metadata-driven) and merges them into the same resolved JSON as md_rule_input column projections.
 - Target conflict resolution is deterministic: nvl(md_rule.rule_priority_no, 0) desc, then rule_id desc.
 
 ### Boundaries
 - In scope: metadata-driven selection, expression execution, lookup/PLSQL/column-to-row execution, source-context resolution, scalar projection expression enrichment, target DML orchestration, runtime diagnostics.
+- In scope: metadata-driven selection, expression execution, SQL_SELECT execution, lookup/PLSQL/column-to-row execution, source-context resolution, scalar projection expression enrichment, target DML orchestration, runtime diagnostics.
 - Out of scope in these packages: ingestion into md_change_event_raw, orchestration outside execute_run caller contract, deployment/promotion automation.
 
 ### Invariants Observed In Code
@@ -31,7 +32,7 @@ flowchart TD
   C --> D[prefetch_selected_contexts plus scalar projections]
   D --> E[get_prefetched_rule_source_values per rule]
   E --> F[evaluate_selection_gate]
-  F -->|PASSED| G[evaluate output_expr via md_expr_executor_pkg]
+  F -->|PASSED| G[evaluate output_expr or SQL_SELECT]
   F -->|FILTERED/ERROR| H[skip or record error]
   G --> I[persist_target_value]
   I --> J[consolidate_rule_actions]
@@ -48,6 +49,7 @@ flowchart LR
   RE --> RPAR[md_run_parameter_pkg]
   RE --> SCR[md_source_context_resolver_pkg]
   RE --> EXPR[md_expr_executor_pkg]
+  RE --> SQLSEL[SQL_SELECT branch]
   RE --> LOOK[md_lookup_executor_pkg]
   RE --> CTR[md_column_to_row_executor_pkg]
   RE --> PF[md_plsql_func_executor_pkg]
@@ -71,6 +73,7 @@ flowchart LR
     - md_rule_executor_pkg.substitute_change_delta_tokens
     - md_rule_executor_pkg.substitute_tokens
   - md_expr_executor_pkg.evaluate_expr (for output_expr path)
+  - md_rule_executor_pkg.execute_sql_select_to_json (for SQL_SELECT path)
   - md_rule_executor_pkg.persist_target_value
   - md_rule_executor_pkg.consolidate_rule_actions
     - md_rule_executor_pkg.upsert_target_consolidation
@@ -93,9 +96,11 @@ flowchart LR
 - sql/scripts/033_md_rule_input_expr_upgrade.sql :: md_rule_input_expr incremental deployment
 - sql/scripts/034_md_rule_priority_upgrade.sql :: md_rule.rule_priority_no optional precedence metadata
 - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql :: consolidated runtime artifacts and action trace phase columns
+- sql/scripts/036_md_sql_select_rule_upgrade.sql :: md_rule.rule_type SQL_SELECT support and payload contract comment
 - plsql/packages/md_expr_executor_pkg.pkb :: evaluate_expr
 - plsql/packages/md_lookup_executor_pkg.pkb :: execute_lookup
 - plsql/packages/md_column_to_row_executor_pkg.pkb :: execute_column_to_row
 - plsql/packages/md_plsql_func_executor_pkg.pkb :: execute_plsql_func
 - sql/scripts/020_md_runtime.sql :: md_run, md_run_selected_rule, md_run_target_value, md_run_target_action, md_impact_trace
 - sql/scripts/073_md_target_consolidation_smoke.sql :: deterministic consolidation + consolidated-only execution validation
+- sql/scripts/074_md_sql_select_rule_smoke.sql :: SQL_SELECT guardrails, cardinality checks, alias-derived outputs, and consolidated execution validation

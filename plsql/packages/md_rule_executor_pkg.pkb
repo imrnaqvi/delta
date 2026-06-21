@@ -271,6 +271,165 @@ create or replace package body md_rule_executor_pkg as
       return null;
   end get_json_key_value;
 
+  function get_rule_payload_attr(
+    p_rule_payload in clob,
+    p_attr         in varchar2
+  ) return varchar2 is
+    l_obj  json_object_t;
+    l_elem json_element_t;
+  begin
+    if p_rule_payload is null then
+      return null;
+    end if;
+
+    l_obj := json_object_t.parse(p_rule_payload);
+    if not l_obj.has(p_attr) then
+      return null;
+    end if;
+
+    l_elem := l_obj.get(p_attr);
+    if l_elem is null or l_elem.is_null then
+      return null;
+    elsif l_elem.is_string then
+      return l_obj.get_string(p_attr);
+    else
+      return l_elem.to_string;
+    end if;
+  exception
+    when others then
+      return null;
+  end get_rule_payload_attr;
+
+  function extract_sql_select_query(
+    p_rule_payload in clob
+  ) return clob is
+    l_sql_query clob;
+  begin
+    l_sql_query := get_rule_payload_attr(p_rule_payload, 'sql_query');
+    if l_sql_query is null then
+      raise_application_error(-20802, 'SQL_SELECT payload missing sql_query');
+    end if;
+    return l_sql_query;
+  end extract_sql_select_query;
+
+  function sql_select_token_sub_enabled(
+    p_rule_payload in clob
+  ) return boolean is
+    l_flag varchar2(10);
+  begin
+    l_flag := upper(nvl(get_rule_payload_attr(p_rule_payload, 'enable_token_substitution'), 'Y'));
+    return l_flag in ('Y', 'TRUE', '1');
+  end sql_select_token_sub_enabled;
+
+  procedure validate_sql_select_query(
+    p_sql_query in clob
+  ) is
+    l_sql_text varchar2(4000);
+    l_upper    varchar2(4000);
+  begin
+    if p_sql_query is null then
+      raise_application_error(-20802, 'SQL_SELECT payload missing sql_query');
+    end if;
+
+    if dbms_lob.getlength(p_sql_query) > 4000 then
+      raise_application_error(-20803, 'SQL_SELECT query exceeds 4000 characters in v1');
+    end if;
+
+    l_sql_text := trim(dbms_lob.substr(p_sql_query, 4000, 1));
+    l_upper := upper(l_sql_text);
+
+    if not regexp_like(l_sql_text, '^[[:space:]]*(WITH[[:space:][:print:]]+SELECT|SELECT)([[:space:]]|\()', 'in') then
+      raise_application_error(-20803, 'SQL_SELECT must start with SELECT or WITH ... SELECT');
+    end if;
+
+    if instr(l_sql_text, ';') > 0 then
+      raise_application_error(-20803, 'SQL_SELECT query must be a single statement without semicolon');
+    end if;
+
+    if regexp_like(l_upper, '(^|[^A-Z])(INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|BEGIN|DECLARE|EXECUTE[[:space:]]+IMMEDIATE)([^A-Z]|$)') then
+      raise_application_error(-20803, 'SQL_SELECT guardrail violation: blocked keyword detected');
+    end if;
+  end validate_sql_select_query;
+
+  function apply_sql_select_tokens(
+    p_sql_query       in clob,
+    p_source_values   in clob,
+    p_params_json     in clob,
+    p_change_event_id in number,
+    p_tenant_id       in varchar2,
+    p_context_id      in varchar2
+  ) return clob is
+    l_sql_text varchar2(4000);
+  begin
+    l_sql_text := dbms_lob.substr(p_sql_query, 4000, 1);
+    l_sql_text := substitute_change_delta_tokens(
+      p_expr            => l_sql_text,
+      p_change_event_id => p_change_event_id,
+      p_tenant_id       => p_tenant_id,
+      p_context_id      => p_context_id
+    );
+    l_sql_text := substitute_tokens(l_sql_text, p_source_values, p_params_json);
+    return l_sql_text;
+  end apply_sql_select_tokens;
+
+  function execute_sql_select_to_json(
+    p_sql_query in clob
+  ) return clob is
+    l_rc            sys_refcursor;
+    l_cursor        integer := null;
+    l_col_cnt       number;
+    l_desc_tab      dbms_sql.desc_tab2;
+    l_fetch_count   number;
+    l_col_value     varchar2(4000);
+    l_alias         varchar2(128);
+    l_result_obj    json_object_t := json_object_t();
+  begin
+    open l_rc for dbms_lob.substr(p_sql_query, 4000, 1);
+    l_cursor := dbms_sql.to_cursor_number(l_rc);
+
+    dbms_sql.describe_columns2(l_cursor, l_col_cnt, l_desc_tab);
+    for i in 1 .. l_col_cnt loop
+      dbms_sql.define_column(l_cursor, i, l_col_value, 4000);
+    end loop;
+
+    l_fetch_count := dbms_sql.fetch_rows(l_cursor);
+    if l_fetch_count = 0 then
+      raise_application_error(-20804, 'SQL_SELECT returned zero rows');
+    end if;
+
+    for i in 1 .. l_col_cnt loop
+      dbms_sql.column_value(l_cursor, i, l_col_value);
+      l_alias := upper(trim(l_desc_tab(i).col_name));
+
+      if l_alias is null then
+        raise_application_error(-20806, 'SQL_SELECT returned unnamed column at position ' || i);
+      end if;
+
+      if l_result_obj.has(l_alias) then
+        raise_application_error(-20806, 'SQL_SELECT duplicate output alias after normalization: ' || l_alias);
+      end if;
+
+      if l_col_value is null then
+        l_result_obj.put_null(l_alias);
+      else
+        l_result_obj.put(l_alias, l_col_value);
+      end if;
+    end loop;
+
+    if dbms_sql.fetch_rows(l_cursor) > 0 then
+      raise_application_error(-20805, 'SQL_SELECT returned multiple rows');
+    end if;
+
+    dbms_sql.close_cursor(l_cursor);
+    return l_result_obj.to_clob;
+  exception
+    when others then
+      if l_cursor is not null and dbms_sql.is_open(l_cursor) then
+        dbms_sql.close_cursor(l_cursor);
+      end if;
+      raise;
+  end execute_sql_select_to_json;
+
   function resolve_mapped_value(
     p_source_kind    in varchar2,
     p_source_expr    in clob,
@@ -1556,6 +1715,38 @@ create or replace package body md_rule_executor_pkg as
           l_result.failure_reason := l_func_result.failure_reason;
         end;
 
+      when 'SQL_SELECT' then
+        declare
+          l_sql_query    clob;
+          l_sql_result   clob;
+          l_result_obj   json_object_t;
+          l_keys         json_key_list;
+        begin
+          l_sql_query := extract_sql_select_query(p_rule_payload);
+          validate_sql_select_query(l_sql_query);
+          if sql_select_token_sub_enabled(p_rule_payload) then
+            l_sql_query := apply_sql_select_tokens(
+              p_sql_query       => l_sql_query,
+              p_source_values   => p_source_values,
+              p_params_json     => p_params_json,
+              p_change_event_id => null,
+              p_tenant_id       => p_tenant_id,
+              p_context_id      => p_context_id
+            );
+          end if;
+
+          l_sql_result := execute_sql_select_to_json(l_sql_query);
+          l_result_obj := json_object_t.parse(l_sql_result);
+          l_keys := l_result_obj.get_keys;
+
+          l_result.value_status := 'COMPUTED';
+          l_result.value_data_type := 'VARCHAR2';
+          l_result.computed_value_json := l_sql_result;
+          if l_keys.count > 0 then
+            l_result.computed_value_txt := get_rule_output_value(l_sql_result, l_keys(1));
+          end if;
+        end;
+
       else
         raise_application_error(-20003, 'Unknown rule type: ' || p_rule_type);
     end case;
@@ -1605,6 +1796,7 @@ create or replace package body md_rule_executor_pkg as
     l_gate_message      varchar2(4000);
     l_output_values_obj json_object_t;
     l_any_output_failed boolean;
+    l_skip_consolidation boolean;
 
     cursor c_selected_rules is
       select run_selected_rule_id, rule_id, transitive_flag
@@ -1768,99 +1960,202 @@ create or replace package body md_rule_executor_pkg as
 
         l_result.metrics.rules_executed := l_result.metrics.rules_executed + 1;
 
-        if l_rule_type <> 'EXPRESSION' then
-          l_result.error_messages.extend;
-          l_result.error_messages(l_result.error_messages.last) :=
-            'Rule type not supported for output_expr evaluation: rule_id=' || l_rule_id || ', rule_type=' || l_rule_type;
-          continue;
-        end if;
-
         l_output_values_obj := json_object_t();
         l_any_output_failed := false;
         l_rule_output_values_json := null;
+        l_skip_consolidation := false;
 
-        -- Persist results per output column
-        if l_rule_outputs is not null then
-          for out_rec in (
-            select jt.target_column_name,
-                   jt.output_expr
-              from json_table(
-                     l_rule_outputs,
-                     '$[*]'
-                     columns (
-                       target_column_name varchar2(128) path '$.target_column_name',
-                       output_expr varchar2(4000) path '$.output_expr'
-                     )
-                   ) jt
-          ) loop
-            if out_rec.output_expr is null then
-              l_computed_value.computed_value_txt := null;
-              l_computed_value.computed_value_json := null;
-              l_computed_value.value_data_type := null;
-              l_computed_value.value_status := 'FAILED';
-              l_computed_value.failure_reason :=
-                'Output expression missing for target column: ' || out_rec.target_column_name;
-            else
-              declare
-                l_expr_result md_expr_executor_pkg.computed_value_rec;
-              begin
-                l_expr_result := md_expr_executor_pkg.evaluate_expr(
-                  p_expr          => out_rec.output_expr,
-                  p_source_values => l_source_values,
-                  p_params_json   => l_params_json,
-                  p_tenant_id     => p_tenant_id,
-                  p_context_id    => p_context_id
+        if l_rule_type = 'EXPRESSION' then
+          -- Persist results per output column
+          if l_rule_outputs is not null then
+            for out_rec in (
+              select jt.target_column_name,
+                     jt.output_expr
+                from json_table(
+                       l_rule_outputs,
+                       '$[*]'
+                       columns (
+                         target_column_name varchar2(128) path '$.target_column_name',
+                         output_expr varchar2(4000) path '$.output_expr'
+                       )
+                     ) jt
+            ) loop
+              if out_rec.output_expr is null then
+                l_computed_value.computed_value_txt := null;
+                l_computed_value.computed_value_json := null;
+                l_computed_value.value_data_type := null;
+                l_computed_value.value_status := 'FAILED';
+                l_computed_value.failure_reason :=
+                  'Output expression missing for target column: ' || out_rec.target_column_name;
+              else
+                declare
+                  l_expr_result md_expr_executor_pkg.computed_value_rec;
+                begin
+                  l_expr_result := md_expr_executor_pkg.evaluate_expr(
+                    p_expr          => out_rec.output_expr,
+                    p_source_values => l_source_values,
+                    p_params_json   => l_params_json,
+                    p_tenant_id     => p_tenant_id,
+                    p_context_id    => p_context_id
+                  );
+
+                  l_computed_value.computed_value_txt := l_expr_result.computed_value_txt;
+                  l_computed_value.computed_value_json := l_expr_result.computed_value_json;
+                  l_computed_value.value_data_type := l_expr_result.value_data_type;
+                  l_computed_value.value_status := l_expr_result.value_status;
+                  l_computed_value.failure_reason := l_expr_result.failure_reason;
+                end;
+              end if;
+
+              persist_target_value(
+                p_run_id,
+                l_rule_id,
+                out_rec.target_column_name,
+                l_computed_value,
+                p_tenant_id,
+                p_context_id
+              );
+
+              if l_computed_value.value_status = 'COMPUTED' then
+                l_result.metrics.values_computed := l_result.metrics.values_computed + 1;
+                l_output_values_obj.put(out_rec.target_column_name, l_computed_value.computed_value_txt);
+              elsif l_computed_value.value_status = 'SKIPPED' then
+                l_result.metrics.values_skipped := l_result.metrics.values_skipped + 1;
+              else
+                l_any_output_failed := true;
+                l_result.metrics.values_failed := l_result.metrics.values_failed + 1;
+
+                log_output_eval_failure_trace(
+                  p_run_id             => p_run_id,
+                  p_change_event_id    => l_change_event_id,
+                  p_rule_id            => l_rule_id,
+                  p_target_column_name => out_rec.target_column_name,
+                  p_output_expr        => out_rec.output_expr,
+                  p_failure_reason     => l_computed_value.failure_reason,
+                  p_tenant_id          => p_tenant_id,
+                  p_context_id         => p_context_id
                 );
 
-                l_computed_value.computed_value_txt := l_expr_result.computed_value_txt;
-                l_computed_value.computed_value_json := l_expr_result.computed_value_json;
-                l_computed_value.value_data_type := l_expr_result.value_data_type;
-                l_computed_value.value_status := l_expr_result.value_status;
-                l_computed_value.failure_reason := l_expr_result.failure_reason;
-              end;
+                if upper(nvl(l_output_eval_failure_policy, 'CONTINUE')) = 'FAIL_RULE' then
+                  l_result.error_messages.extend;
+                  l_result.error_messages(l_result.error_messages.last) :=
+                    'Output evaluation failed: rule_id=' || l_rule_id ||
+                    ', target_column=' || out_rec.target_column_name ||
+                    ', error=' || nvl(l_computed_value.failure_reason, 'UNKNOWN');
+                  exit;
+                end if;
+              end if;
+            end loop;
+
+            l_rule_output_values_json := l_output_values_obj.to_clob;
+          end if;
+        elsif l_rule_type = 'SQL_SELECT' then
+          declare
+            l_sql_query            clob;
+            l_sql_result_json      clob;
+            l_sql_keys             json_key_list;
+            l_alias_name           varchar2(128);
+            l_alias_value          varchar2(4000);
+          begin
+            l_sql_query := extract_sql_select_query(l_rule_payload);
+            validate_sql_select_query(l_sql_query);
+
+            if sql_select_token_sub_enabled(l_rule_payload) then
+              l_sql_query := apply_sql_select_tokens(
+                p_sql_query       => l_sql_query,
+                p_source_values   => l_source_values,
+                p_params_json     => l_params_json,
+                p_change_event_id => l_change_event_id,
+                p_tenant_id       => p_tenant_id,
+                p_context_id      => p_context_id
+              );
             end if;
 
-            persist_target_value(
-              p_run_id,
-              l_rule_id,
-              out_rec.target_column_name,
-              l_computed_value,
-              p_tenant_id,
-              p_context_id
-            );
+            l_sql_result_json := execute_sql_select_to_json(l_sql_query);
+            l_output_values_obj := json_object_t.parse(l_sql_result_json);
+            l_sql_keys := l_output_values_obj.get_keys;
 
-            if l_computed_value.value_status = 'COMPUTED' then
+            if l_sql_keys.count = 0 then
+              raise_application_error(-20806, 'SQL_SELECT returned no output columns');
+            end if;
+
+            for i in 1 .. l_sql_keys.count loop
+              l_alias_name := upper(trim(l_sql_keys(i)));
+              l_alias_value := get_rule_output_value(l_sql_result_json, l_alias_name);
+
+              l_computed_value.computed_value_txt := l_alias_value;
+              l_computed_value.computed_value_json := null;
+              l_computed_value.value_data_type := 'VARCHAR2';
+              l_computed_value.value_status := 'COMPUTED';
+              l_computed_value.failure_reason := null;
+
+              persist_target_value(
+                p_run_id,
+                l_rule_id,
+                l_alias_name,
+                l_computed_value,
+                p_tenant_id,
+                p_context_id
+              );
+
               l_result.metrics.values_computed := l_result.metrics.values_computed + 1;
-              l_output_values_obj.put(out_rec.target_column_name, l_computed_value.computed_value_txt);
-            elsif l_computed_value.value_status = 'SKIPPED' then
-              l_result.metrics.values_skipped := l_result.metrics.values_skipped + 1;
-            else
+            end loop;
+
+            l_rule_output_values_json := l_output_values_obj.to_clob;
+
+            begin
+              insert into md_impact_trace (
+                impact_trace_id,
+                tenant_id,
+                context_id,
+                run_id,
+                change_event_id,
+                source_ref_json,
+                rule_ref_json,
+                target_ref_json
+              ) values (
+                md_impact_trace_seq.nextval,
+                p_tenant_id,
+                p_context_id,
+                p_run_id,
+                l_change_event_id,
+                json_object('diagnostic_type' value 'SQL_SELECT_SQL_TEXT', 'rule_id' value l_rule_id returning clob),
+                json_object('stage' value 'EXECUTE_RUN', 'step' value 'SQL_SELECT' returning clob),
+                json_object('sql_text' value dbms_lob.substr(l_sql_query, 3900, 1) returning clob)
+              );
+            exception
+              when others then
+                null;
+            end;
+          exception
+            when others then
               l_any_output_failed := true;
+              l_skip_consolidation := true;
               l_result.metrics.values_failed := l_result.metrics.values_failed + 1;
+              l_result.error_messages.extend;
+              l_result.error_messages(l_result.error_messages.last) :=
+                'SQL_SELECT evaluation failed: rule_id=' || l_rule_id || ', error=' || sqlerrm;
 
               log_output_eval_failure_trace(
                 p_run_id             => p_run_id,
                 p_change_event_id    => l_change_event_id,
                 p_rule_id            => l_rule_id,
-                p_target_column_name => out_rec.target_column_name,
-                p_output_expr        => out_rec.output_expr,
-                p_failure_reason     => l_computed_value.failure_reason,
+                p_target_column_name => 'SQL_SELECT',
+                p_output_expr        => dbms_lob.substr(l_rule_payload, 3900, 1),
+                p_failure_reason     => sqlerrm,
                 p_tenant_id          => p_tenant_id,
                 p_context_id         => p_context_id
               );
+            end;
+        else
+          l_result.error_messages.extend;
+          l_result.error_messages(l_result.error_messages.last) :=
+            'Rule type not supported for output evaluation: rule_id=' || l_rule_id || ', rule_type=' || l_rule_type;
+          continue;
+        end if;
 
-              if upper(nvl(l_output_eval_failure_policy, 'CONTINUE')) = 'FAIL_RULE' then
-                l_result.error_messages.extend;
-                l_result.error_messages(l_result.error_messages.last) :=
-                  'Output evaluation failed: rule_id=' || l_rule_id ||
-                  ', target_column=' || out_rec.target_column_name ||
-                  ', error=' || nvl(l_computed_value.failure_reason, 'UNKNOWN');
-                exit;
-              end if;
-            end if;
-          end loop;
-
-          l_rule_output_values_json := l_output_values_obj.to_clob;
+        if l_skip_consolidation then
+          continue;
         end if;
 
         if l_any_output_failed and upper(nvl(l_output_eval_failure_policy, 'CONTINUE')) = 'FAIL_RULE' then
