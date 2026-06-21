@@ -126,6 +126,7 @@ create table md_rule (
   rule_name                 varchar2(200) not null,
   rule_type                 varchar2(40) not null,
   status                    varchar2(20) not null,
+  sql_select_query          clob,
   rule_payload              clob check (rule_payload is json),
   output_eval_failure_policy varchar2(20) default 'CONTINUE' not null,
   selection_gate_expr       clob,
@@ -134,7 +135,7 @@ create table md_rule (
   created_by                varchar2(128) not null,
   created_at                timestamp default systimestamp not null,
   updated_at                timestamp,
-  constraint md_rule_type_ck check (rule_type in ('EXPRESSION','COLUMN_TO_ROW','LOOKUP','PLSQL_FUNC')),
+  constraint md_rule_type_ck check (rule_type in ('EXPRESSION','COLUMN_TO_ROW','LOOKUP','PLSQL_FUNC','SQL_SELECT')),
   constraint md_rule_output_fail_policy_ck check (output_eval_failure_policy in ('CONTINUE','FAIL_RULE')),
   constraint md_rule_status_ck check (status in ('DRAFT','APPROVED','PUBLISHED','RETIRED')),
   constraint md_rule_gate_enabled_ck check (selection_gate_enabled_flag in ('Y','N')),
@@ -144,6 +145,12 @@ create table md_rule (
 );
 
 create sequence md_rule_seq start with 1 increment by 1 nocache;
+
+comment on column md_rule.sql_select_query is
+'Preferred SQL text for SQL_SELECT rules. Orchestrator resolves this first, then falls back to legacy rule_payload.sql_query during transition.';
+
+comment on column md_rule.rule_payload is
+'JSON payload by rule type. For SQL_SELECT, rule_payload.sql_query is legacy fallback; prefer md_rule.sql_select_query.';
 
 create table md_expr_allowed_function (
   expr_allowed_function_id   number primary key,
