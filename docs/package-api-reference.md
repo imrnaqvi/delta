@@ -15,7 +15,7 @@
 #### Public API (Spec)
 | Routine | Signature Summary | Side Effects | Errors/Status |
 |---|---|---|---|
-| execute_run | (run_id, change_event_id, tenant_id, context_id, params_json?) -> run_result_rec | Writes md_run_selected_rule, md_run_target_value, md_run_target_action, md_impact_trace, md_run status; reads selection/context/rule metadata | Sets run_status SUCCEEDED/FAILED/PARTIAL; accumulates error_messages |
+| execute_run | (run_id, change_event_id, tenant_id, context_id, params_json?) -> run_result_rec | Writes md_run_selected_rule, md_run_target_value, md_run_target_consolidation, md_run_target_consolidated_value, md_run_target_action, md_impact_trace, md_run status; reads selection/context/rule metadata | Sets run_status SUCCEEDED/FAILED/PARTIAL; accumulates error_messages |
 | execute_rule | (rule_id, tenant_id, context_id, source_values) -> computed_value_rec | No direct persistence in function itself | Returns FAILED with sqlerrm on exception |
 | persist_target_value | (run_id, rule_id, target_column_name, computed_value, tenant_id, context_id) | Inserts md_run_target_value idempotently by fingerprint | Re-raises after log_error on failure |
 | log_impact_trace | (run_id, rule_id, source_json, tenant_id, context_id) | Inserts md_impact_trace | Swallows errors after log_error |
@@ -26,7 +26,10 @@
 | Routine | Purpose | Side Effects |
 |---|---|---|
 | evaluate_selection_gate | Evaluates md_rule.selection_gate_expr after token substitution | Updates output status/message via caller update on md_run_selected_rule |
-| apply_target_actions | Executes generated UPDATE/INSERT SQL and writes md_run_target_action | Target table DML via execute immediate; trace rows in md_run_target_action |
+| consolidate_rule_actions | Builds/merges winner candidates into consolidated runtime artifacts | Writes md_run_target_consolidation and md_run_target_consolidated_value |
+| execute_consolidated_actions_for_run | Executes final UPDATE/INSERT from consolidated winners only | Target table DML via execute immediate; writes md_run_target_action with execution_phase=CONSOLIDATED_EXECUTION |
+| upsert_target_consolidation | Ensures consolidation header exists and status is updated | Writes md_run_target_consolidation |
+| upsert_consolidated_winner | Applies deterministic precedence and upserts winners-only value cells | Writes md_run_target_consolidated_value |
 | resolve_mapped_value | Resolves source expressions for key/value mappings | May execute immediate for EXPR source kind |
 | log_output_eval_failure_trace | Writes synthetic failed action row for output_expr evaluation failures | Inserts md_run_target_action |
 | substitute_tokens | SRC./alias./PARAM. substitution | None |
@@ -87,13 +90,13 @@
 - Effective transaction boundary appears to be caller/session controlled.
 
 ## Suggested Improvements
-- Promote key private routines (token substitution and gate evaluation contracts) into explicit design docs with examples.
+- Promote key private routines (token substitution, gate evaluation, and consolidation precedence contracts) into explicit design docs with examples.
 - Add a package-level error-code registry appendix to reduce duplicated ad-hoc code ranges.
 - Add unit-level API compatibility checks for pks signatures.
 
 ## Evidence References
 - plsql/packages/md_rule_executor_pkg.pks :: execute_run, execute_rule, persist_target_value, log_impact_trace, update_run_status, generate_fingerprint, record types
-- plsql/packages/md_rule_executor_pkg.pkb :: evaluate_selection_gate, apply_target_actions, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value
+- plsql/packages/md_rule_executor_pkg.pkb :: evaluate_selection_gate, consolidate_rule_actions, execute_consolidated_actions_for_run, upsert_target_consolidation, upsert_consolidated_winner, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value
 - plsql/packages/md_rule_selector_pkg.pks and plsql/packages/md_rule_selector_pkg.pkb :: populate_selected_rules
 - plsql/packages/md_source_context_resolver_pkg.pks and plsql/packages/md_source_context_resolver_pkg.pkb :: resolve_rule_source_values, prefetch_selected_contexts, get_prefetched_rule_source_values
 - sql/scripts/033_md_rule_input_expr_upgrade.sql :: md_rule_input_expr metadata structure

@@ -6,7 +6,7 @@
 
 | Change Area | Directly Impacted Packages | Smoke Scripts To Re-run |
 |---|---|---|
-| md_rule, md_rule_input, md_rule_output, md_rule_input_expr | md_rule_executor_pkg, md_rule_selector_pkg, md_source_context_resolver_pkg | 060, 061, 064, 066, 067 |
+| md_rule (including rule_priority_no), md_rule_input, md_rule_output, md_rule_input_expr | md_rule_executor_pkg, md_rule_selector_pkg, md_source_context_resolver_pkg | 060, 061, 064, 066, 067, 073 |
 | md_rule_dependency | md_rule_selector_pkg | 060, 067 |
 | md_rule_parameter_requirement, md_run_parameter* | md_run_parameter_pkg, md_rule_executor_pkg, md_source_context_resolver_pkg | 064 (canonical), 062/063 wrappers |
 | md_source_context*, md_source_context_predicate, md_rule_source_context | md_source_context_resolver_pkg, md_rule_executor_pkg | 061, 064 |
@@ -16,12 +16,13 @@
 | md_run_selected_rule | md_rule_selector_pkg, md_rule_executor_pkg, md_source_context_resolver_pkg | 060, 067 |
 | md_run_context_snapshot, md_run_source_snapshot | md_source_context_resolver_pkg, md_rule_executor_pkg | 061, 064 |
 | md_run_target_action, md_run_target_value, md_impact_trace | md_rule_executor_pkg, md_source_context_resolver_pkg | 066, 061, 064 |
+| md_run_target_consolidation, md_run_target_consolidated_value | md_rule_executor_pkg | 066, 073 |
 
 ### B) Package Signature Change Impact Matrix
 
 | Package Changed | Immediate Callers | Suggested Regression Scope |
 |---|---|---|
-| md_rule_executor_pkg | smoke scripts 061, 064, 066, 067 | Full suite 060-069 |
+| md_rule_executor_pkg | smoke scripts 061, 064, 066, 067, 073 | Full suite 060-069 plus 073 |
 | md_rule_selector_pkg | md_rule_executor_pkg.execute_run, smoke 060 | 060, 067, 066 |
 | md_source_context_resolver_pkg | md_rule_executor_pkg.execute_run | 061, 064, 066 |
 | md_run_parameter_pkg | md_rule_executor_pkg, md_source_context_resolver_pkg | 064, 066, 067 |
@@ -39,6 +40,7 @@
 | Source-context resolution changes | Re-run 061 and verify expected derived value and run status |
 | Scalar source projection (md_rule_input_expr) changes | Re-run 061 and 064; verify projected aliases appear in run source/context snapshots and downstream rule behavior |
 | output_eval_failure_policy behavior changes | Re-run 066 and inspect md_run_target_action failure traces |
+| Target consolidation precedence/execution changes | Re-run 066 and 073; validate winners-only artifact, execution_phase=CONSOLIDATED_EXECUTION, and deterministic precedence (nvl(priority,0) desc, rule_id desc) |
 | Selector logic changes | Re-run 060 and verify selection counts/reasons |
 | Expr governance changes | Re-run 068 and 069 |
 
@@ -70,7 +72,13 @@
 1. Insert md_rule_target_action.
 2. Insert md_rule_target_key_map for key components.
 3. Insert md_rule_target_column_map for value mapping.
-4. Validate md_rule_executor_pkg.apply_target_actions behavior with 066.
+4. Validate consolidation + consolidated execution behavior with 066 and 073.
+
+### Add/Adjust Consolidation Precedence
+1. Set md_rule.rule_priority_no (optional).
+2. Remember effective precedence: nvl(rule_priority_no, 0) desc, then rule_id desc.
+3. Validate winners in md_run_target_consolidated_value.
+4. Validate final action rows in md_run_target_action with execution_phase=CONSOLIDATED_EXECUTION.
 
 ### Add A New Expression Function Allowlist Entry
 1. Insert md_expr_allowed_function for tenant/context and function_name.
@@ -82,9 +90,10 @@
 2. sql/scripts/061_md_cross_entity_context_smoke.sql
 3. sql/scripts/064_md_runtime_params_smoke_combined.sql
 4. sql/scripts/066_md_target_dml_smoke.sql
-5. sql/scripts/067_md_rule_selection_gate_smoke.sql
-6. sql/scripts/068_md_expr_validator_smoke.sql
-7. sql/scripts/069_md_expr_function_registry_smoke.sql
+5. sql/scripts/073_md_target_consolidation_smoke.sql
+6. sql/scripts/067_md_rule_selection_gate_smoke.sql
+7. sql/scripts/068_md_expr_validator_smoke.sql
+8. sql/scripts/069_md_expr_function_registry_smoke.sql
 
 Expected pass criteria:
 - No raise_application_error in each script.
@@ -92,12 +101,12 @@ Expected pass criteria:
 - For 064/066/067, script-specific row-count/value assertions hold.
 
 ## Suggested Improvements
-- Add a single master smoke runner script that executes 060-069 in order with summarized pass/fail report.
+- Add a single master smoke runner script that executes 060-069 plus 073 in order with summarized pass/fail report.
 - Add package signature contract tests that diff pks signatures between releases.
 - Add table-column usage linter to detect metadata changes that break package SQL.
 
 ## Evidence References
-- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, dispatch_rule_execution, apply_target_actions
+- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, dispatch_rule_execution, consolidate_rule_actions, execute_consolidated_actions_for_run
 - plsql/packages/md_rule_selector_pkg.pkb :: populate_selected_rules
 - plsql/packages/md_source_context_resolver_pkg.pkb :: resolve_rule_source_values, prefetch_selected_contexts, get_prefetched_rule_source_values
 - sql/scripts/033_md_rule_input_expr_upgrade.sql
@@ -112,5 +121,8 @@ Expected pass criteria:
 - sql/scripts/067_md_rule_selection_gate_smoke.sql
 - sql/scripts/068_md_expr_validator_smoke.sql
 - sql/scripts/069_md_expr_function_registry_smoke.sql
+- sql/scripts/073_md_target_consolidation_smoke.sql
 - sql/scripts/010_md_core.sql
 - sql/scripts/020_md_runtime.sql
+- sql/scripts/034_md_rule_priority_upgrade.sql
+- sql/scripts/035_md_target_consolidation_runtime_upgrade.sql

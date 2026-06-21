@@ -9,7 +9,8 @@
 | Selector persistence | sql/scripts/060_md_selector_smoke.sql | md_rule_selector_pkg.populate_selected_rules | Raises -20620 if gate columns mutate before execution; otherwise selector smoke completes |
 | Cross-entity source context | sql/scripts/061_md_cross_entity_context_smoke.sql | md_rule_executor_pkg.execute_run -> md_source_context_resolver_pkg | Raises -20101 when run status unexpected; -20102 when expected target value mismatches |
 | Runtime parameters (canonical) | sql/scripts/064_md_runtime_params_smoke_combined.sql (062/063 redirect) | md_rule_executor_pkg.execute_run with early+late params | Raises -20401..-20406 on status/value/snapshot failures |
-| Target DML end-to-end | sql/scripts/066_md_target_dml_smoke.sql | execute_run + apply_target_actions | Raises -20501..-20503 on update/insert/action-trace mismatches |
+| Target DML end-to-end | sql/scripts/066_md_target_dml_smoke.sql | execute_run + consolidate_rule_actions + execute_consolidated_actions_for_run | Raises -20501..-20503 on consolidated execution/action-trace mismatches |
+| Target consolidation precedence | sql/scripts/073_md_target_consolidation_smoke.sql | execute_run + consolidation artifacts | Raises -20901..-20913 for precedence, winners-only, and consolidated execution invariants |
 | Selection gate behavior | sql/scripts/067_md_rule_selection_gate_smoke.sql | execute_run + evaluate_selection_gate | Raises -20601..-20605 on selected/gate/executed/value count mismatches |
 | Expr validator guardrails | sql/scripts/068_md_expr_validator_smoke.sql | md_expr_executor_pkg.evaluate_expr | Raises -20801..-20803 for unexpected validation behavior |
 | Expr function registry governance | sql/scripts/069_md_expr_function_registry_smoke.sql | md_expr_executor_pkg.load_registry_allowed_functions + evaluate_expr | Raises -20901..-20904 for registry allow/deny behavior mismatches |
@@ -20,7 +21,8 @@
 |---|---|---|---|---|
 | md_rule_executor_pkg.evaluate_selection_gate | select case when (...) from dual | selection_gate_expr after OLD/NEW + SRC/PARAM substitution | Expression text evaluation; no bind variables | gate status ERROR with message |
 | md_rule_executor_pkg.resolve_mapped_value (EXPR) | select <expr> from dual | source_expr after substitute_tokens | Uses substituted literal text | returns null on exception |
-| md_rule_executor_pkg.apply_target_actions | update/insert target tables | md_rule_target_action, key maps, column maps | values escaped via enquote_value; object names from md_object/md_column metadata | increments failed count, logs error |
+| md_rule_executor_pkg.consolidate_rule_actions | metadata-driven key/value projection | md_rule_target_action, md_rule_target_key_map, md_rule_target_column_map, rule outputs | winner selection via nvl(rule_priority_no,0) desc then rule_id desc | increments failed count, marks partial consolidation |
+| md_rule_executor_pkg.execute_consolidated_actions_for_run | update/insert target tables | md_run_target_consolidation + md_run_target_consolidated_value winners | emits md_run_target_action with execution_phase=CONSOLIDATED_EXECUTION | increments failed/skipped counters and writes FAILED consolidated traces |
 | md_expr_executor_pkg.evaluate_expr | select <evaluated expr> from dual | p_expr + source/param substitution | validate_expression_guardrails before execute immediate | returns FAILED with validation/evaluation reason |
 | md_source_context_resolver_pkg.build_context_projection_json | select json_object(...) from dynamic join graph | md_source_context_object/join/predicate + rule-scoped md_rule_input + md_rule_input_expr | clean_identifier for identifiers; to_sql_literal for predicate values; blocks risky SQL tokens in scalar_expr; SQL text logged in md_impact_trace | returns {} on no rows; predicate errors raise app errors; required scalar expr failures raise app errors |
 | md_lookup_executor_pkg.execute_lookup | dynamic select with dbms_sql binds | lookup_table, return_columns, join_key | clean_identifier + bind variables | returns SKIPPED/FAILED |
@@ -46,18 +48,19 @@
 7. Evaluate selection gate
 8. Evaluate output expressions
 9. Persist target values
-10. Apply target actions
-11. Log impact trace
-12. Finalize run status
+10. Build/merge consolidated winners (per target_entity_name + target key + target column)
+11. Execute consolidated target actions
+12. Log impact trace
+13. Finalize run status
 
 ## Suggested Improvements
-- Add a metadata flag to require bind-based dynamic SQL generation for target actions to reduce literal SQL generation risk.
+- Add a per-consolidation conflict trace payload for winner/loser explainability when collisions occur.
 - Add deterministic logging toggle for all generated dynamic SQL statements (not only resolver projection SQL).
 - Add token substitution collision tests for alias names that overlap with column names.
-- Add a dedicated smoke script for md_rule_input_expr projection (multi-expression rows, inline AS aliases, skip-vs-required failure behavior).
+- Add performance baseline smoke for high cardinality consolidation.
 
 ## Evidence References
-- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, evaluate_selection_gate, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value, apply_target_actions
+- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, evaluate_selection_gate, substitute_tokens, substitute_change_delta_tokens, resolve_mapped_value, consolidate_rule_actions, execute_consolidated_actions_for_run
 - plsql/packages/md_expr_executor_pkg.pkb :: substitute_source_references, substitute_param_references, validate_expression_guardrails, evaluate_expr
 - plsql/packages/md_source_context_resolver_pkg.pkb :: build_context_projection_json, clean_identifier, to_sql_literal, prefetch_selected_contexts
 - sql/scripts/033_md_rule_input_expr_upgrade.sql :: md_rule_input_expr metadata source
@@ -73,3 +76,4 @@
 - sql/scripts/067_md_rule_selection_gate_smoke.sql
 - sql/scripts/068_md_expr_validator_smoke.sql
 - sql/scripts/069_md_expr_function_registry_smoke.sql
+- sql/scripts/073_md_target_consolidation_smoke.sql

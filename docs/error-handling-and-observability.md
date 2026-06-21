@@ -8,7 +8,8 @@
 |---|---|---|
 | md_rule_executor_pkg.execute_run | Catch-all per rule and top-level | Per-rule failure appends error_messages and continues; top-level sets run_status FAILED |
 | md_rule_executor_pkg.evaluate_selection_gate | Catch-all -> ERROR status | Returns gate_eval_status=ERROR and gate_eval_message |
-| md_rule_executor_pkg.apply_target_actions | Per-action block catch-all | Increments failed counter and logs error |
+| md_rule_executor_pkg.consolidate_rule_actions | Per-action and per-column block catch-all | Increments failed counter; marks consolidation header PARTIAL when needed |
+| md_rule_executor_pkg.execute_consolidated_actions_for_run | Per-winner block catch-all | Increments failed/skipped counters; writes consolidated FAILED action rows |
 | md_rule_executor_pkg.persist_target_value | Catch-all with re-raise | Logs then raises |
 | md_rule_executor_pkg.log_impact_trace | Catch-all swallow | Logs error and does not re-raise |
 | md_rule_selector_pkg.populate_selected_rules | no_data_found mapped | Raises -20021 for missing run |
@@ -30,6 +31,7 @@
 | -20010 | md_rule_executor_pkg.apply_target_actions | No target key mapping |
 | -20011 | md_rule_executor_pkg.apply_target_actions | Target row not found for update |
 | -20012 | md_rule_executor_pkg.apply_target_actions | Insert column list build failure |
+| -20071 | md_rule_executor_pkg.execute_consolidated_actions_for_run | Target row not found for consolidated action |
 | -20021 | md_rule_selector_pkg.populate_selected_rules | Run not found |
 | -20031 | md_source_context_resolver_pkg.resolve_rule_source_values | Change event not found |
 | -20032 | md_source_context_resolver_pkg.resolve_rule_source_values | Required context alias missing |
@@ -52,8 +54,10 @@
 | Table | Produced By | Payload Convention |
 |---|---|---|
 | md_impact_trace | md_rule_executor_pkg.log_impact_trace; md_source_context_resolver_pkg.build_context_projection_json; execute_run diagnostic insert for RULE_SOURCE_VALUES | JSON blobs in source_ref_json/rule_ref_json/target_ref_json; resolver uses diagnostic_type=SOURCE_CONTEXT_SQL and RULE_SCALAR_EXPR_SKIPPED; executor logs diagnostic_type=RULE_SOURCE_VALUES |
-| md_run_target_action | md_rule_executor_pkg.apply_target_actions; md_rule_executor_pkg.log_output_eval_failure_trace | execution_status, generated_sql_text, bind_payload_json, error_code/error_message, action_fingerprint |
+| md_run_target_action | md_rule_executor_pkg.execute_consolidated_actions_for_run; md_rule_executor_pkg.log_output_eval_failure_trace | execution_status, generated_sql_text, bind_payload_json, error_code/error_message, action_fingerprint, execution_phase, run_target_consolidation_id |
 | md_run_target_value | md_rule_executor_pkg.persist_target_value | computed_value_txt/json, value_status, value_fingerprint |
+| md_run_target_consolidation | md_rule_executor_pkg.upsert_target_consolidation | consolidation_status, winning_value_count, source_rule_count |
+| md_run_target_consolidated_value | md_rule_executor_pkg.upsert_consolidated_winner | winners-only value cells with winner_rule_id/winner_priority_no |
 | md_run_selected_rule | md_rule_selector_pkg + md_rule_executor_pkg | selection_reason, transitive_flag, gate_eval_status/message |
 
 ### Transaction Control
@@ -65,8 +69,10 @@
 2. Check md_run_selected_rule for gate_eval_status distribution.
 3. Check md_run_target_value for computed statuses.
 4. Check md_run_target_action for execution_status, generated_sql_text, error_message.
-5. Check md_impact_trace diagnostics for SOURCE_CONTEXT_SQL, RULE_SOURCE_VALUES, and RULE_SCALAR_EXPR_SKIPPED payloads.
-6. Re-run focused smoke script for failing subsystem:
+5. Check md_run_target_consolidation for consolidation_status and winner counters.
+6. Check md_run_target_consolidated_value for winners-only state and precedence provenance.
+7. Check md_impact_trace diagnostics for SOURCE_CONTEXT_SQL, RULE_SOURCE_VALUES, and RULE_SCALAR_EXPR_SKIPPED payloads.
+8. Re-run focused smoke script for failing subsystem:
    - selector: 060
    - context: 061
    - params: 064
@@ -74,6 +80,7 @@
    - gate: 067
    - expr guardrails: 068
    - function registry: 069
+   - consolidation: 073
 
 ## Suggested Improvements
 - Add severity and subsystem fields to md_impact_trace payload convention for easier filtering.
@@ -81,7 +88,7 @@
 - Add optional hard-fail mode for currently swallowed diagnostic writes.
 
 ## Evidence References
-- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, evaluate_selection_gate, apply_target_actions, persist_target_value, log_impact_trace, log_output_eval_failure_trace
+- plsql/packages/md_rule_executor_pkg.pkb :: execute_run, evaluate_selection_gate, consolidate_rule_actions, execute_consolidated_actions_for_run, persist_target_value, log_impact_trace, log_output_eval_failure_trace
 - plsql/packages/md_rule_selector_pkg.pkb :: populate_selected_rules
 - plsql/packages/md_source_context_resolver_pkg.pkb :: resolve_rule_source_values, build_context_projection_json, prefetch_selected_contexts
 - sql/scripts/033_md_rule_input_expr_upgrade.sql :: md_rule_input_expr metadata for scalar projection
@@ -98,3 +105,5 @@
 - sql/scripts/068_md_expr_validator_smoke.sql
 - sql/scripts/069_md_expr_function_registry_smoke.sql
 - sql/scripts/020_md_runtime.sql :: md_impact_trace, md_run_target_action, md_run_target_value, md_run_selected_rule
+- sql/scripts/035_md_target_consolidation_runtime_upgrade.sql :: md_run_target_consolidation, md_run_target_consolidated_value, md_run_target_action consolidation columns
+- sql/scripts/073_md_target_consolidation_smoke.sql

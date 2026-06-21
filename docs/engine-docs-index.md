@@ -44,9 +44,10 @@ Primary sequence:
 2. sql/scripts/061_md_cross_entity_context_smoke.sql
 3. sql/scripts/064_md_runtime_params_smoke_combined.sql
 4. sql/scripts/066_md_target_dml_smoke.sql
-5. sql/scripts/067_md_rule_selection_gate_smoke.sql
-6. sql/scripts/068_md_expr_validator_smoke.sql
-7. sql/scripts/069_md_expr_function_registry_smoke.sql
+5. sql/scripts/073_md_target_consolidation_smoke.sql
+6. sql/scripts/067_md_rule_selection_gate_smoke.sql
+7. sql/scripts/068_md_expr_validator_smoke.sql
+8. sql/scripts/069_md_expr_function_registry_smoke.sql
 
 Wrapper scripts:
 1. sql/scripts/062_md_runtime_params_smoke.sql
@@ -61,3 +62,5 @@ Cleanup helper:
 - DDL source of truth for table and datatype definitions is:
   - sql/scripts/010_md_core.sql
   - sql/scripts/020_md_runtime.sql
+  - sql/scripts/034_md_rule_priority_upgrade.sql
+  - sql/scripts/035_md_target_consolidation_runtime_upgrade.sql

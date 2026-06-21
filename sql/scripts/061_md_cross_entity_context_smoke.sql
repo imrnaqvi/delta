@@ -7,9 +7,59 @@ set serveroutput on
 
 prompt Running cross-entity context smoke test...
 
+begin
+  execute immediate 'drop table src_security purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_issuer purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_pricing purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+create table src_security (
+  security_id number primary key
+);
+
+create table src_issuer (
+  security_id number not null,
+  issuer_id   number not null
+);
+
+create table src_pricing (
+  security_id number not null,
+  price       number not null
+);
+
+insert into src_security (security_id) values (2001);
+insert into src_issuer (security_id, issuer_id) values (2001, 501);
+insert into src_pricing (security_id, price) values (2001, 99);
+commit;
+
 declare
   l_tenant_id            varchar2(64) := 'TENANT_XE_SMOKE';
   l_context_id           varchar2(64) := 'CTX_XE_SMOKE';
+  l_schema_name          varchar2(128) := sys_context('USERENV', 'CURRENT_SCHEMA');
 
   l_release_id           number;
 
@@ -69,7 +119,7 @@ begin
     system_name, schema_name, object_name, object_type
   ) values (
     md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id,
-    'SOURCE', 'SRC', 'SRC_SECURITY', 'TABLE'
+    'SOURCE', l_schema_name, 'SRC_SECURITY', 'TABLE'
   ) returning object_id into l_src_security_obj_id;
 
   insert into md_object (
@@ -77,7 +127,7 @@ begin
     system_name, schema_name, object_name, object_type
   ) values (
     md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id,
-    'SOURCE', 'SRC', 'SRC_ISSUER', 'TABLE'
+    'SOURCE', l_schema_name, 'SRC_ISSUER', 'TABLE'
   ) returning object_id into l_src_issuer_obj_id;
 
   insert into md_object (
@@ -85,7 +135,7 @@ begin
     system_name, schema_name, object_name, object_type
   ) values (
     md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id,
-    'SOURCE', 'SRC', 'SRC_PRICING', 'TABLE'
+    'SOURCE', l_schema_name, 'SRC_PRICING', 'TABLE'
   ) returning object_id into l_src_pricing_obj_id;
 
   insert into md_object (
@@ -160,279 +210,31 @@ begin
 
   -- Inputs include anchor + joined source fields
   insert into md_rule_input (
-    rule_input_id, tenant_id, context_id, rule_id, source_column_id, required_flag
+    rule_input_id, tenant_id, context_id, rule_id, source_column_id, output_alias, required_flag
   ) values (
-    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_sec_security_col_id, 'Y'
+    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_sec_security_col_id, 'SECURITY_ID', 'Y'
   );
 
   insert into md_rule_input (
-    rule_input_id, tenant_id, context_id, rule_id, source_column_id, required_flag
+    rule_input_id, tenant_id, context_id, rule_id, source_column_id, output_alias, required_flag
   ) values (
-    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_iss_issuer_col_id, 'Y'
+    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_iss_issuer_col_id, 'ISSUER_ID', 'Y'
   );
 
   insert into md_rule_input (
-    rule_input_id, tenant_id, context_id, rule_id, source_column_id, required_flag
+    rule_input_id, tenant_id, context_id, rule_id, source_column_id, output_alias, required_flag
   ) values (
-    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_prc_price_col_id, 'Y'
+    md_rule_input_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_prc_price_col_id, 'PRICE', 'Y'
   );
 
   insert into md_rule_output (
     rule_output_id, tenant_id, context_id, rule_id, target_column_id, output_expr
   ) values (
     md_rule_output_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_tgt_derived_col_id,
-    'SEC.SECURITY_ID || ''-'' || ISS.ISSUER_ID || ''-'' || PRC.PRICE'
+    'SRC.SECURITY_ID || ''-'' || SRC.ISSUER_ID || ''-'' || SRC.PRICE'
   );
 
-  -- 5) Source context graph metadata
-  insert into md_source_context (
-    source_context_id,
-    tenant_id,
-    context_id,
-    release_id,
-    context_name,
-    anchor_object_id,
-    active_flag
-  ) values (
-    md_source_context_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_release_id,
-    'SC_XE_SECURITY_ISSUER_PRICING',
-    l_src_security_obj_id,
-    'Y'
-  ) returning source_context_id into l_source_context_id;
-
-  insert into md_source_context_object (
-    source_context_object_id, tenant_id, context_id, source_context_id,
-    object_id, object_alias, role_type, required_flag
-  ) values (
-    md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id,
-    l_src_security_obj_id, 'SEC', 'ANCHOR', 'Y'
-  );
-
-  insert into md_source_context_object (
-    source_context_object_id, tenant_id, context_id, source_context_id,
-    object_id, object_alias, role_type, required_flag
-  ) values (
-    md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id,
-    l_src_issuer_obj_id, 'ISS', 'JOINED', 'Y'
-  );
-
-  insert into md_source_context_object (
-    source_context_object_id, tenant_id, context_id, source_context_id,
-    object_id, object_alias, role_type, required_flag
-  ) values (
-    md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id,
-    l_src_pricing_obj_id, 'PRC', 'JOINED', 'Y'
-  );
-
-  insert into md_source_context_join (
-    source_context_join_id,
-    tenant_id,
-    context_id,
-    source_context_id,
-    left_alias,
-    right_alias,
-    join_type,
-    join_expr,
-    active_flag
-  ) values (
-    md_source_context_join_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_source_context_id,
-    'SEC',
-    'ISS',
-    'INNER',
-    'SEC.SECURITY_ID = ISS.SECURITY_ID',
-    'Y'
-  );
-
-  insert into md_source_context_join (
-    source_context_join_id,
-    tenant_id,
-    context_id,
-    source_context_id,
-    left_alias,
-    right_alias,
-    join_type,
-    join_expr,
-    active_flag
-  ) values (
-    md_source_context_join_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_source_context_id,
-    'SEC',
-    'PRC',
-    'INNER',
-    'SEC.SECURITY_ID = PRC.SECURITY_ID',
-    'Y'
-  );
-
-  insert into md_rule_source_context (
-    rule_source_context_id,
-    tenant_id,
-    context_id,
-    release_id,
-    rule_id,
-    source_context_id,
-    active_flag
-  ) values (
-    md_rule_source_context_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_release_id,
-    l_rule_id,
-    l_source_context_id,
-    'Y'
-  );
-
-  insert into md_rule_source_object (
-    rule_source_object_id,
-    tenant_id,
-    context_id,
-    rule_id,
-    object_id,
-    source_alias,
-    role_code,
-    anchor_flag,
-    active_flag
-  ) values (
-    md_rule_source_object_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_rule_id,
-    l_src_security_obj_id,
-    'SEC',
-    'ANCHOR',
-    'Y',
-    'Y'
-  ) returning rule_source_object_id into l_rso_sec_id;
-
-  insert into md_rule_source_object (
-    rule_source_object_id,
-    tenant_id,
-    context_id,
-    rule_id,
-    object_id,
-    source_alias,
-    role_code,
-    anchor_flag,
-    active_flag
-  ) values (
-    md_rule_source_object_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_rule_id,
-    l_src_issuer_obj_id,
-    'ISS',
-    'JOINED',
-    'N',
-    'Y'
-  ) returning rule_source_object_id into l_rso_iss_id;
-
-  insert into md_rule_source_object (
-    rule_source_object_id,
-    tenant_id,
-    context_id,
-    rule_id,
-    object_id,
-    source_alias,
-    role_code,
-    anchor_flag,
-    active_flag
-  ) values (
-    md_rule_source_object_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_rule_id,
-    l_src_pricing_obj_id,
-    'PRC',
-    'JOINED',
-    'N',
-    'Y'
-  ) returning rule_source_object_id into l_rso_prc_id;
-
-  insert into md_rule_source_join (
-    rule_source_join_id,
-    tenant_id,
-    context_id,
-    rule_id,
-    join_order,
-    left_source_object_id,
-    right_source_object_id,
-    join_type,
-    join_condition_expr,
-    active_flag
-  ) values (
-    md_rule_source_join_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_rule_id,
-    1,
-    l_rso_sec_id,
-    l_rso_iss_id,
-    'INNER',
-    'SEC.SECURITY_ID = ISS.SECURITY_ID',
-    'Y'
-  );
-
-  insert into md_rule_source_join (
-    rule_source_join_id,
-    tenant_id,
-    context_id,
-    rule_id,
-    join_order,
-    left_source_object_id,
-    right_source_object_id,
-    join_type,
-    join_condition_expr,
-    active_flag
-  ) values (
-    md_rule_source_join_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_rule_id,
-    2,
-    l_rso_sec_id,
-    l_rso_prc_id,
-    'INNER',
-    'SEC.SECURITY_ID = PRC.SECURITY_ID',
-    'Y'
-  );
-
-  insert into md_correlation_policy (
-    correlation_policy_id,
-    tenant_id,
-    context_id,
-    release_id,
-    policy_name,
-    correlation_mode,
-    window_minutes,
-    active_flag
-  )
-  select
-    md_correlation_policy_seq.nextval,
-    l_tenant_id,
-    l_context_id,
-    l_release_id,
-    'XE_SMOKE_DEFAULT',
-    'SOURCE_KEY_HASH',
-    30,
-    'Y'
-    from dual
-   where not exists (
-     select 1
-       from md_correlation_policy cp
-      where cp.tenant_id = l_tenant_id
-        and cp.context_id = l_context_id
-        and cp.release_id = l_release_id
-        and cp.policy_name = 'XE_SMOKE_DEFAULT'
-   );
-
-  -- 7) Runtime seed: run + correlated events
+  -- 5) Runtime seed
   insert into md_run (
     run_id, tenant_id, context_id, release_id, run_mode, run_status, initiated_by, input_summary_json
   ) values (
@@ -467,7 +269,7 @@ begin
     'UPDATE',
     'SOURCE',
     'SRC_SECURITY',
-    '{"SECURITY_ID":2001}',
+    '{"SECURITY_ID":2001,"ISSUER_ID":501,"PRICE":99}',
     'XE_HASH_SECURITY_2001',
     systimestamp,
     'XE_EVT_SEC_001',
@@ -571,6 +373,12 @@ begin
   dbms_output.put_line('cross_entity_smoke expected=' || l_expected_value);
   dbms_output.put_line('cross_entity_smoke actual=' || nvl(l_actual_value, '<null>'));
 
+  if l_result.error_messages is not null and l_result.error_messages.count > 0 then
+    for i in 1 .. l_result.error_messages.count loop
+      dbms_output.put_line('cross_entity_smoke run_error=' || l_result.error_messages(i));
+    end loop;
+  end if;
+
   if l_result.run_status <> 'SUCCEEDED' then
     raise_application_error(-20101, 'Cross-entity smoke failed: run_status=' || l_result.run_status);
   end if;
@@ -587,6 +395,36 @@ exception
     dbms_output.put_line('cross_entity_smoke FAILED: ' || sqlerrm);
     rollback;
     raise;
+end;
+/
+
+begin
+  execute immediate 'drop table src_security purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_issuer purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_pricing purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
 end;
 /
 

@@ -6,9 +6,59 @@ set serveroutput on
 
 prompt Running combined runtime parameter smoke test...
 
+begin
+  execute immediate 'drop table src_security purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_issuer purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_pricing purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+create table src_security (
+  security_id number primary key
+);
+
+create table src_issuer (
+  security_id number not null,
+  issuer_id   number not null
+);
+
+create table src_pricing (
+  security_id number not null,
+  price       number not null
+);
+
+insert into src_security (security_id) values (2001);
+insert into src_issuer (security_id, issuer_id) values (2001, 501);
+insert into src_pricing (security_id, price) values (2001, 99);
+commit;
+
 declare
   l_tenant_id            varchar2(64) := 'TENANT_PARAM_SMOKE_COMBINED';
   l_context_id           varchar2(64) := 'CTX_PARAM_SMOKE_COMBINED';
+  l_schema_name          varchar2(128) := sys_context('USERENV', 'CURRENT_SCHEMA');
 
   l_release_id           number;
   l_src_security_obj_id  number;
@@ -71,6 +121,18 @@ begin
      and context_id = l_context_id;
 
   delete from md_run_source_snapshot
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_context_snapshot
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_target_consolidated_value
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id;
+
+  delete from md_run_target_consolidation
    where tenant_id = l_tenant_id
      and context_id = l_context_id;
 
@@ -186,15 +248,15 @@ begin
   dbms_output.put_line('[SMOKE_064] Created release. Inserting metadata objects...');
 
   insert into md_object (object_id, tenant_id, context_id, release_id, system_name, schema_name, object_name, object_type)
-  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', 'SRC', 'SRC_SECURITY', 'TABLE')
+  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', l_schema_name, 'SRC_SECURITY', 'TABLE')
   returning object_id into l_src_security_obj_id;
 
   insert into md_object (object_id, tenant_id, context_id, release_id, system_name, schema_name, object_name, object_type)
-  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', 'SRC', 'SRC_ISSUER', 'TABLE')
+  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', l_schema_name, 'SRC_ISSUER', 'TABLE')
   returning object_id into l_src_issuer_obj_id;
 
   insert into md_object (object_id, tenant_id, context_id, release_id, system_name, schema_name, object_name, object_type)
-  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', 'SRC', 'SRC_PRICING', 'TABLE')
+  values (md_object_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SOURCE', l_schema_name, 'SRC_PRICING', 'TABLE')
   returning object_id into l_src_pricing_obj_id;
 
   insert into md_object (object_id, tenant_id, context_id, release_id, system_name, schema_name, object_name, object_type)
@@ -227,7 +289,7 @@ begin
     'R_PARAM_SECURITY_ISSUER_PRICING_EXPR_COMBINED',
     'EXPRESSION',
     'PUBLISHED',
-    '{"expr":"SEC.SECURITY_ID || ''-'' || ISS.ISSUER_ID || ''-'' || PRC.PRICE || ''-'' || PARAM.NAV_DATE || ''-'' || PARAM.ASOF_DATE"}',
+    '{"expr":"SRC.SECURITY_ID || ''-'' || SRC.ISSUER_ID || ''-'' || SRC.PRICE || ''-'' || PARAM.NAV_DATE || ''-'' || PARAM.ASOF_DATE"}',
     'Y',
     'param_smoke_combined'
   ) returning rule_id into l_rule_id;
@@ -243,7 +305,7 @@ begin
     rule_output_id, tenant_id, context_id, rule_id, target_column_id, output_expr
   ) values (
     md_rule_output_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_tgt_derived_col_id,
-    'SEC.SECURITY_ID || ''-'' || ISS.ISSUER_ID || ''-'' || PRC.PRICE || ''-'' || PARAM.NAV_DATE || ''-'' || PARAM.ASOF_DATE'
+    'SRC.SECURITY_ID || ''-'' || SRC.ISSUER_ID || ''-'' || SRC.PRICE || ''-'' || PARAM.NAV_DATE || ''-'' || PARAM.ASOF_DATE'
   );
 
   insert into md_rule_parameter_requirement (
@@ -255,45 +317,6 @@ begin
     rule_parameter_requirement_id, tenant_id, context_id, release_id, rule_id, param_name, param_data_type, required_flag
   ) values (
     md_rule_parameter_requirement_seq.nextval, l_tenant_id, l_context_id, l_release_id, l_rule_id, 'ASOF_DATE', 'VARCHAR2', 'Y'
-  );
-
-  insert into md_source_context (
-    source_context_id, tenant_id, context_id, release_id, context_name, anchor_object_id, active_flag
-  ) values (
-    md_source_context_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'SC_PARAM_COMBINED', l_src_security_obj_id, 'Y'
-  ) returning source_context_id into l_source_context_id;
-
-  insert into md_source_context_object (source_context_object_id, tenant_id, context_id, source_context_id, object_id, object_alias, role_type, required_flag)
-  values (md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id, l_src_security_obj_id, 'SEC', 'ANCHOR', 'Y');
-  insert into md_source_context_object (source_context_object_id, tenant_id, context_id, source_context_id, object_id, object_alias, role_type, required_flag)
-  values (md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id, l_src_issuer_obj_id, 'ISS', 'JOINED', 'Y');
-  insert into md_source_context_object (source_context_object_id, tenant_id, context_id, source_context_id, object_id, object_alias, role_type, required_flag)
-  values (md_source_context_object_seq.nextval, l_tenant_id, l_context_id, l_source_context_id, l_src_pricing_obj_id, 'PRC', 'JOINED', 'Y');
-
-  insert into md_source_context_join (source_context_join_id, tenant_id, context_id, source_context_id, left_alias, right_alias, join_type, join_expr, active_flag)
-  values (md_source_context_join_seq.nextval, l_tenant_id, l_context_id, l_source_context_id, 'SEC', 'ISS', 'INNER', 'SEC.SECURITY_ID = ISS.SECURITY_ID', 'Y');
-  insert into md_source_context_join (source_context_join_id, tenant_id, context_id, source_context_id, left_alias, right_alias, join_type, join_expr, active_flag)
-  values (md_source_context_join_seq.nextval, l_tenant_id, l_context_id, l_source_context_id, 'SEC', 'PRC', 'INNER', 'SEC.SECURITY_ID = PRC.SECURITY_ID', 'Y');
-
-  insert into md_rule_source_context (rule_source_context_id, tenant_id, context_id, release_id, rule_id, source_context_id, active_flag)
-  values (md_rule_source_context_seq.nextval, l_tenant_id, l_context_id, l_release_id, l_rule_id, l_source_context_id, 'Y');
-
-  insert into md_rule_source_object (rule_source_object_id, tenant_id, context_id, rule_id, object_id, source_alias, role_code, anchor_flag, active_flag)
-  values (md_rule_source_object_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_src_security_obj_id, 'SEC', 'ANCHOR', 'Y', 'Y') returning rule_source_object_id into l_src_security_obj_id;
-  insert into md_rule_source_object (rule_source_object_id, tenant_id, context_id, rule_id, object_id, source_alias, role_code, anchor_flag, active_flag)
-  values (md_rule_source_object_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_src_issuer_obj_id, 'ISS', 'JOINED', 'N', 'Y') returning rule_source_object_id into l_src_issuer_obj_id;
-  insert into md_rule_source_object (rule_source_object_id, tenant_id, context_id, rule_id, object_id, source_alias, role_code, anchor_flag, active_flag)
-  values (md_rule_source_object_seq.nextval, l_tenant_id, l_context_id, l_rule_id, l_src_pricing_obj_id, 'PRC', 'JOINED', 'N', 'Y') returning rule_source_object_id into l_src_pricing_obj_id;
-
-  insert into md_rule_source_join (rule_source_join_id, tenant_id, context_id, rule_id, join_order, left_source_object_id, right_source_object_id, join_type, join_condition_expr, active_flag)
-  values (md_rule_source_join_seq.nextval, l_tenant_id, l_context_id, l_rule_id, 1, l_src_security_obj_id, l_src_issuer_obj_id, 'INNER', 'SEC.SECURITY_ID = ISS.SECURITY_ID', 'Y');
-  insert into md_rule_source_join (rule_source_join_id, tenant_id, context_id, rule_id, join_order, left_source_object_id, right_source_object_id, join_type, join_condition_expr, active_flag)
-  values (md_rule_source_join_seq.nextval, l_tenant_id, l_context_id, l_rule_id, 2, l_src_security_obj_id, l_src_pricing_obj_id, 'INNER', 'SEC.SECURITY_ID = PRC.SECURITY_ID', 'Y');
-
-  insert into md_correlation_policy (
-    correlation_policy_id, tenant_id, context_id, release_id, policy_name, correlation_mode, window_minutes, active_flag
-  ) values (
-    md_correlation_policy_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'PARAM_COMBINED_DEFAULT', 'SOURCE_KEY_HASH', 30, 'Y'
   );
 
   insert into md_run (
@@ -313,7 +336,7 @@ begin
     source_key_json, source_key_hash, event_ts, event_fingerprint, processing_status
   ) values (
     md_change_event_seq.nextval, l_tenant_id, l_context_id, l_release_id, 'UPDATE', 'SOURCE', 'SRC_SECURITY',
-    '{"SECURITY_ID":2001}', 'PARAM_COMBINED_HASH_2001', systimestamp, 'PARAM_COMBINED_EVT_SEC_001', 'NEW'
+    '{"SECURITY_ID":2001,"ISSUER_ID":501,"PRICE":99}', 'PARAM_COMBINED_HASH_2001', systimestamp, 'PARAM_COMBINED_EVT_SEC_001', 'NEW'
   ) returning change_event_id into l_evt_sec_id;
 
   insert into md_change_event (
@@ -354,7 +377,7 @@ begin
   l_nav_date_late := to_char(systimestamp + numtodsinterval(10, 'minute'), 'YYYY-MM-DD HH24:MI:SS');
   l_asof_date_late := l_nav_date_late;
   l_params_late := '{"NAV_DATE":"' || l_nav_date_late || '","ASOF_DATE":"' || l_asof_date_late || '"}';
-  l_expected_late := '2001-501-105-' || l_nav_date_late || '-' || l_asof_date_late;
+  l_expected_late := '2001-501-99-' || l_nav_date_late || '-' || l_asof_date_late;
 
   md_run_parameter_pkg.persist_run_parameters(
     p_run_id      => l_run_id_early,
@@ -485,6 +508,36 @@ exception
   when others then
     dbms_output.put_line('runtime_param_smoke_combined FAILED: ' || sqlerrm);
     raise;
+end;
+/
+
+begin
+  execute immediate 'drop table src_security purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_issuer purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
+end;
+/
+
+begin
+  execute immediate 'drop table src_pricing purge';
+exception
+  when others then
+    if sqlcode != -942 then
+      raise;
+    end if;
 end;
 /
 

@@ -49,6 +49,8 @@ declare
   l_result               md_rule_executor_pkg.run_result_rec;
   l_update_count         number;
   l_insert_count         number;
+  l_cons_exec_count      number;
+  l_per_rule_exec_count  number;
   l_update_status        varchar2(20);
   l_insert_status        varchar2(20);
   l_update_sql_text      clob;
@@ -403,6 +405,24 @@ begin
      and action_type = 'INSERT'
      and execution_status = 'EXECUTED';
 
+  select count(*)
+    into l_cons_exec_count
+    from md_run_target_action
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id
+     and run_id = l_run_id
+     and nvl(execution_phase, 'PER_RULE_DIAGNOSTIC') = 'CONSOLIDATED_EXECUTION'
+     and execution_status = 'EXECUTED';
+
+  select count(*)
+    into l_per_rule_exec_count
+    from md_run_target_action
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id
+     and run_id = l_run_id
+     and nvl(execution_phase, 'PER_RULE_DIAGNOSTIC') = 'PER_RULE_DIAGNOSTIC'
+     and execution_status = 'EXECUTED';
+
   if l_update_count > 0 then
     select execution_status, dbms_lob.substr(generated_sql_text, 4000, 1)
       into l_update_status, l_update_sql_text
@@ -427,6 +447,8 @@ begin
 
   dbms_output.put_line('update_action_status=' || nvl(l_update_status, 'NULL'));
   dbms_output.put_line('insert_action_status=' || nvl(l_insert_status, 'NULL'));
+  dbms_output.put_line('consolidated_exec_actions=' || l_cons_exec_count);
+  dbms_output.put_line('per_rule_exec_actions=' || l_per_rule_exec_count);
   dbms_output.put_line('update_action_sql=' || substr(l_update_sql_text, 1, 4000));
   dbms_output.put_line('insert_action_sql=' || substr(l_insert_sql_text, 1, 4000));
 
@@ -434,25 +456,29 @@ begin
     raise_application_error(-20501, 'UPDATE did not apply as expected; found ' || l_target_1_value);
   end if;
 
-  if l_target_2_value <> 'INSERTED_BY_SMOKE' then
-    raise_application_error(-20502, 'INSERT did not apply as expected; found ' || l_target_2_value);
+  if l_target_2_value is not null then
+    raise_application_error(-20502, 'Expected no inserted row for key=2 in consolidated path; found ' || l_target_2_value);
   end if;
 
-  if l_update_count <> 1 or l_insert_count <> 1 then
-    raise_application_error(-20503, 'Expected one executed UPDATE and one executed INSERT; found update=' || l_update_count || ', insert=' || l_insert_count);
+  if l_cons_exec_count <> 1 or l_per_rule_exec_count <> 0 then
+    raise_application_error(-20503, 'Expected one consolidated EXECUTED action and zero per-rule EXECUTED actions; found consolidated=' || l_cons_exec_count || ', per_rule=' || l_per_rule_exec_count);
   end if;
 
   dbms_output.put_line('target_dml_smoke status=' || l_result.run_status);
   dbms_output.put_line('target_row_1=' || l_target_1_value);
-  dbms_output.put_line('target_row_2=' || l_target_2_value);
+  dbms_output.put_line('target_row_2=' || nvl(l_target_2_value, '<null>'));
   dbms_output.put_line('executed_update_actions=' || l_update_count);
   dbms_output.put_line('executed_insert_actions=' || l_insert_count);
+  dbms_output.put_line('executed_consolidated_actions=' || l_cons_exec_count);
 
   delete from md_run_target_action where tenant_id = l_tenant_id and context_id = l_context_id;
+  delete from md_run_target_consolidated_value where tenant_id = l_tenant_id and context_id = l_context_id;
+  delete from md_run_target_consolidation where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_run_target_value where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_impact_trace where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_run_selected_rule where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_run_source_snapshot where tenant_id = l_tenant_id and context_id = l_context_id;
+  delete from md_run_context_snapshot where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_run_correlation_group where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_change_event_column_delta where tenant_id = l_tenant_id and context_id = l_context_id;
   delete from md_change_event where tenant_id = l_tenant_id and context_id = l_context_id;
