@@ -18,6 +18,7 @@ prompt Ensuring prerequisite upgrades for SQL_SELECT smoke...
 @C:\Users\imrna\delta\sql\scripts\034_md_rule_priority_upgrade.sql
 @C:\Users\imrna\delta\sql\scripts\035_md_target_consolidation_runtime_upgrade.sql
 @C:\Users\imrna\delta\sql\scripts\036_md_sql_select_rule_upgrade.sql
+@C:\Users\imrna\delta\sql\scripts\037_md_sql_select_storage_upgrade.sql
 
 begin
   execute immediate 'drop table md_sql_select_smoke_tgt purge';
@@ -98,6 +99,8 @@ declare
   l_computed_out_count    number;
   l_failed_trace_count    number;
   l_cons_exec_count       number;
+  l_sql_query_col_count   number;
+  l_sql_query_fb_count    number;
 
   procedure execute_run_with_retry is
   begin
@@ -132,6 +135,7 @@ declare
     p_rule_name   in varchar2,
     p_sql_query   in clob,
     p_target_id   in number,
+    p_sql_source_mode in varchar2 default 'COLUMN',
     o_rule_id     out number
   ) is
     l_action_id number;
@@ -144,6 +148,7 @@ declare
       rule_name,
       rule_type,
       status,
+      sql_select_query,
       rule_payload,
       active_flag,
       created_by
@@ -155,6 +160,10 @@ declare
       p_rule_name,
       'SQL_SELECT',
       'PUBLISHED',
+      case
+        when upper(nvl(p_sql_source_mode, 'COLUMN')) = 'PAYLOAD' then null
+        else p_sql_query
+      end,
       json_object(
         'sql_query' value p_sql_query,
         'enable_token_substitution' value 'Y'
@@ -318,6 +327,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_SIMPLE',
     p_sql_query => q'[select 'SIMPLE_' || SRC.ID as OUT_VAL from dual]',
     p_target_id => 1,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_simple_id
   );
 
@@ -325,6 +335,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_UNION',
     p_sql_query => q'[select max(v) as OUT_VAL from (select 'UNION_OK' v from dual union all select 'UNION_OK' v from dual)]',
     p_target_id => 2,
+    p_sql_source_mode => 'PAYLOAD',
     o_rule_id   => l_rule_union_id
   );
 
@@ -332,6 +343,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_SQL_FUNC',
     p_sql_query => q'[select upper('sql_func_ok') as OUT_VAL from dual]',
     p_target_id => 3,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_sql_func_id
   );
 
@@ -339,6 +351,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_PLSQL_FUNC',
     p_sql_query => q'[select md_sql_select_smoke_fn('OK') as OUT_VAL from dual]',
     p_target_id => 4,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_plsql_func_id
   );
 
@@ -346,6 +359,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_BLOCKED',
     p_sql_query => q'[update md_sql_select_smoke_tgt set smoke_value = 'HACK' where smoke_id = 5]',
     p_target_id => 5,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_blocked_id
   );
 
@@ -353,6 +367,7 @@ begin
     p_rule_name => 'R_SQL_SELECT_ZERO_ROW',
     p_sql_query => q'[select 'ZERO' as OUT_VAL from dual where 1 = 0]',
     p_target_id => 6,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_zero_id
   );
 
@@ -360,8 +375,34 @@ begin
     p_rule_name => 'R_SQL_SELECT_MULTI_ROW',
     p_sql_query => q'[select 'A' as OUT_VAL from dual union all select 'B' as OUT_VAL from dual]',
     p_target_id => 7,
+    p_sql_source_mode => 'COLUMN',
     o_rule_id   => l_rule_multi_id
   );
+
+  select count(*)
+    into l_sql_query_col_count
+    from md_rule
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id
+     and rule_type = 'SQL_SELECT'
+     and sql_select_query is not null;
+
+  select count(*)
+    into l_sql_query_fb_count
+    from md_rule
+   where tenant_id = l_tenant_id
+     and context_id = l_context_id
+     and rule_type = 'SQL_SELECT'
+     and sql_select_query is null
+     and json_exists(rule_payload, '$.sql_query');
+
+  if l_sql_query_col_count < 1 then
+    raise_application_error(-20891, 'Expected at least one SQL_SELECT rule using md_rule.sql_select_query path');
+  end if;
+
+  if l_sql_query_fb_count < 1 then
+    raise_application_error(-20892, 'Expected at least one SQL_SELECT rule using legacy payload fallback path');
+  end if;
 
   insert into md_run (
     run_id, tenant_id, context_id, release_id, run_mode, run_status, initiated_by, input_summary_json

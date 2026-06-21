@@ -39,7 +39,7 @@ begin
   end if;
 exception
   when no_data_found then
-    raise_application_error(-21001, 'Expected MD_RULE or MD_RULE_TYPE_CK metadata was not found.');
+    raise_application_error(-20801, 'Expected MD_RULE or MD_RULE_TYPE_CK metadata was not found.');
 end;
 /
 

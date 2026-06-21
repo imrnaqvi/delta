@@ -301,13 +301,19 @@ create or replace package body md_rule_executor_pkg as
   end get_rule_payload_attr;
 
   function extract_sql_select_query(
-    p_rule_payload in clob
+    p_sql_select_query in clob,
+    p_rule_payload     in clob
   ) return clob is
     l_sql_query clob;
   begin
+    if p_sql_select_query is not null
+       and trim(dbms_lob.substr(p_sql_select_query, 4000, 1)) is not null then
+      return p_sql_select_query;
+    end if;
+
     l_sql_query := get_rule_payload_attr(p_rule_payload, 'sql_query');
     if l_sql_query is null then
-      raise_application_error(-20802, 'SQL_SELECT payload missing sql_query');
+      raise_application_error(-20802, 'SQL_SELECT query missing in md_rule.sql_select_query and legacy rule_payload.sql_query');
     end if;
     return l_sql_query;
   end extract_sql_select_query;
@@ -328,7 +334,7 @@ create or replace package body md_rule_executor_pkg as
     l_upper    varchar2(4000);
   begin
     if p_sql_query is null then
-      raise_application_error(-20802, 'SQL_SELECT payload missing sql_query');
+      raise_application_error(-20802, 'SQL_SELECT query is missing');
     end if;
 
     if dbms_lob.getlength(p_sql_query) > 4000 then
@@ -1541,16 +1547,19 @@ create or replace package body md_rule_executor_pkg as
     p_context_id   in varchar2,
     o_rule_name    out varchar2,
     o_rule_type    out varchar2,
+    o_sql_select_query out clob,
     o_rule_payload out clob,
     o_output_eval_failure_policy out varchar2
   ) is
   begin
     select rule_name,
            rule_type,
+           sql_select_query,
            rule_payload,
            nvl(output_eval_failure_policy, 'CONTINUE')
       into o_rule_name,
            o_rule_type,
+           o_sql_select_query,
            o_rule_payload,
            o_output_eval_failure_policy
       from md_rule
@@ -1650,6 +1659,7 @@ create or replace package body md_rule_executor_pkg as
     p_rule_id       in number,
     p_rule_type     in varchar2,
     p_rule_name     in varchar2,
+    p_sql_select_query in clob,
     p_rule_payload  in clob,
     p_source_values in clob,
     p_params_json   in clob default null,
@@ -1722,7 +1732,10 @@ create or replace package body md_rule_executor_pkg as
           l_result_obj   json_object_t;
           l_keys         json_key_list;
         begin
-          l_sql_query := extract_sql_select_query(p_rule_payload);
+          l_sql_query := extract_sql_select_query(
+            p_sql_select_query => p_sql_select_query,
+            p_rule_payload     => p_rule_payload
+          );
           validate_sql_select_query(l_sql_query);
           if sql_select_token_sub_enabled(p_rule_payload) then
             l_sql_query := apply_sql_select_tokens(
@@ -1772,6 +1785,7 @@ create or replace package body md_rule_executor_pkg as
     l_rule_id           number;
     l_rule_name         varchar2(200);
     l_rule_type         varchar2(40);
+    l_sql_select_query  clob;
     l_rule_payload      clob;
     l_output_eval_failure_policy varchar2(20);
     l_source_values     clob;
@@ -1923,6 +1937,7 @@ create or replace package body md_rule_executor_pkg as
           p_context_id,
           l_rule_name,
           l_rule_type,
+          l_sql_select_query,
           l_rule_payload,
           l_output_eval_failure_policy
         );
@@ -2057,7 +2072,10 @@ create or replace package body md_rule_executor_pkg as
             l_alias_name           varchar2(128);
             l_alias_value          varchar2(4000);
           begin
-            l_sql_query := extract_sql_select_query(l_rule_payload);
+            l_sql_query := extract_sql_select_query(
+              p_sql_select_query => l_sql_select_query,
+              p_rule_payload     => l_rule_payload
+            );
             validate_sql_select_query(l_sql_query);
 
             if sql_select_token_sub_enabled(l_rule_payload) then
@@ -2246,6 +2264,7 @@ create or replace package body md_rule_executor_pkg as
   ) return computed_value_rec is
     l_rule_name    varchar2(200);
     l_rule_type    varchar2(40);
+    l_sql_select_query clob;
     l_rule_payload clob;
     l_output_eval_failure_policy varchar2(20);
     l_result       computed_value_rec;
@@ -2256,6 +2275,7 @@ create or replace package body md_rule_executor_pkg as
       p_context_id,
       l_rule_name,
       l_rule_type,
+      l_sql_select_query,
       l_rule_payload,
       l_output_eval_failure_policy
     );
@@ -2263,6 +2283,7 @@ create or replace package body md_rule_executor_pkg as
       p_rule_id       => p_rule_id,
       p_rule_type     => l_rule_type,
       p_rule_name     => l_rule_name,
+      p_sql_select_query => l_sql_select_query,
       p_rule_payload  => l_rule_payload,
       p_source_values => p_source_values,
       p_params_json   => null,
