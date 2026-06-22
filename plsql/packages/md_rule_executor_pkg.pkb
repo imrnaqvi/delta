@@ -643,6 +643,8 @@ create or replace package body md_rule_executor_pkg as
     l_schema_name     varchar2(128);
     l_object_name     varchar2(128);
     l_column_name     varchar2(128);
+    l_target_column_is_key boolean;
+    l_matching_key_value varchar2(4000);
 
     cursor c_actions is
       select rta.rule_target_action_id,
@@ -785,8 +787,38 @@ create or replace package body md_rule_executor_pkg as
 
           l_insert_columns := null;
           l_insert_values := null;
+          l_target_column_is_key := false;
+          l_matching_key_value := null;
 
           for key_rec in c_key_maps(l_action_id) loop
+            if upper(key_rec.column_name) = upper(col_rec.column_name) then
+              l_target_column_is_key := true;
+
+              l_matching_key_value := normalize_target_value(resolve_mapped_value(
+                key_rec.source_kind,
+                key_rec.source_expr,
+                p_computed_value,
+                p_source_values,
+                p_params_json,
+                p_rule_output_values_json,
+                null
+              ));
+
+              if (l_matching_key_value is null and l_target_value is not null)
+                 or (l_matching_key_value is not null and l_target_value is null)
+                 or (l_matching_key_value <> l_target_value) then
+                raise_application_error(
+                  -20013,
+                  'Conflicting key/value mapping for column ' || col_rec.column_name ||
+                  ' on rule_target_action_id=' || l_action_id ||
+                  ' (key=' || nvl(l_matching_key_value, '<NULL>') ||
+                  ', value=' || nvl(l_target_value, '<NULL>') || ')'
+                );
+              end if;
+
+              continue;
+            end if;
+
             if l_insert_columns is null then
               l_insert_columns := key_rec.column_name;
               l_insert_values := enquote_value(normalize_target_value(resolve_mapped_value(
@@ -813,11 +845,16 @@ create or replace package body md_rule_executor_pkg as
           end loop;
 
           if l_insert_columns is null then
-            raise_application_error(-20012, 'Unable to build insert column list for rule_target_action_id=' || l_action_id);
+            if l_target_column_is_key then
+              l_insert_columns := col_rec.column_name;
+              l_insert_values := enquote_value(l_target_value);
+            else
+              raise_application_error(-20012, 'Unable to build insert column list for rule_target_action_id=' || l_action_id);
+            end if;
+          else
+            l_insert_columns := l_insert_columns || ', ' || col_rec.column_name;
+            l_insert_values := l_insert_values || ', ' || enquote_value(l_target_value);
           end if;
-
-          l_insert_columns := l_insert_columns || ', ' || col_rec.column_name;
-          l_insert_values := l_insert_values || ', ' || enquote_value(l_target_value);
 
           if upper(l_action_type) in ('UPDATE','INSERT') then
             if upper(l_action_type) = 'UPDATE' then
@@ -1268,6 +1305,8 @@ create or replace package body md_rule_executor_pkg as
     l_bind_json            clob;
     l_action_json          clob;
     l_fail_fingerprint     varchar2(200);
+    l_target_column_is_key boolean;
+    l_matching_key_value   varchar2(4000);
 
     cursor c_values is
       select cv.run_target_consolidated_value_id,
@@ -1345,8 +1384,29 @@ create or replace package body md_rule_executor_pkg as
         l_where_clause := null;
         l_insert_columns := null;
         l_insert_values := null;
+        l_target_column_is_key := false;
+        l_matching_key_value := null;
 
         for key_rec in c_key_maps(l_action_id) loop
+          if upper(key_rec.column_name) = upper(rec.target_column_name) then
+            l_target_column_is_key := true;
+
+            l_matching_key_value := get_json_key_value(rec.target_key_json, key_rec.column_name);
+            if (l_matching_key_value is null and rec.computed_value_txt is not null)
+               or (l_matching_key_value is not null and rec.computed_value_txt is null)
+               or (l_matching_key_value <> rec.computed_value_txt) then
+              raise_application_error(
+                -20073,
+                'Conflicting consolidated key/value mapping for column ' || rec.target_column_name ||
+                ' on rule_target_action_id=' || l_action_id ||
+                ' (key=' || nvl(l_matching_key_value, '<NULL>') ||
+                ', value=' || nvl(rec.computed_value_txt, '<NULL>') || ')'
+              );
+            end if;
+
+            continue;
+          end if;
+
           l_key_value := get_json_key_value(rec.target_key_json, key_rec.column_name);
 
           if l_where_clause is null then
@@ -1368,9 +1428,21 @@ create or replace package body md_rule_executor_pkg as
         l_rows_affected := sql%rowcount;
 
         if l_rows_affected = 0 and upper(nvl(l_missing_row_policy, 'ERROR')) = 'INSERT' then
+          if l_insert_columns is null then
+            if l_target_column_is_key then
+              l_insert_columns := rec.target_column_name;
+              l_insert_values := enquote_value(rec.computed_value_txt);
+            else
+              raise_application_error(-20072, 'Unable to build insert column list for consolidated action: ' || l_object_name);
+            end if;
+          else
+            l_insert_columns := l_insert_columns || ', ' || rec.target_column_name;
+            l_insert_values := l_insert_values || ', ' || enquote_value(rec.computed_value_txt);
+          end if;
+
           l_sql := 'insert into ' || l_schema_name || '.' || l_object_name
-              || ' (' || l_insert_columns || ', ' || rec.target_column_name || ') values ('
-              || l_insert_values || ', ' || enquote_value(rec.computed_value_txt) || ')';
+              || ' (' || l_insert_columns || ') values ('
+              || l_insert_values || ')';
           execute immediate l_sql;
           l_rows_affected := sql%rowcount;
         elsif l_rows_affected = 0 and upper(nvl(l_missing_row_policy, 'ERROR')) = 'SKIP' then
